@@ -2,6 +2,7 @@ use crate::models::NewOrderBook;
 use crate::schema::order_books;
 use diesel::prelude::*;
 use diesel::sqlite::SqliteConnection;
+use tracing::{error, info};
 
 pub struct OrdersBookBuffer {
     data: Vec<NewOrderBook>,
@@ -34,10 +35,10 @@ impl OrdersBookBuffer {
 
         match result {
             Ok(_) => {
-                println!("Flushed {} records to disk.", self.data.len());
+                info!("Flushed {} records to disk.", self.data.len());
                 self.data.clear();
             }
-            Err(e) => eprintln!("Error flushing buffer: {}", e),
+            Err(e) => error!("Error flushing buffer: {}", e),
         }
     }
 }
