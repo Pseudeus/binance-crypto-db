@@ -1,8 +1,11 @@
 use chrono::{Datelike, Utc};
 use sqlx::sqlite::{self, SqliteConnectOptions, SqlitePool};
+use std::env;
 use std::str::FromStr;
 use std::time::Duration;
+use tokio::process::Command;
 use tokio::sync::RwLock;
+use tracing::{error, info};
 
 pub struct RotatingPool {
     data_folder: String,
@@ -39,6 +42,7 @@ impl RotatingPool {
         if current_packed != Self::current_packed() {
             let new_pool = get_monthly_pool(&self.data_folder).await?;
             *write = (Self::current_packed(), new_pool);
+            tokio::spawn(async { run_backup_script().await });
         }
         Ok(write.1.clone())
     }
@@ -84,11 +88,8 @@ async fn get_monthly_pool(data_folder: &str) -> Result<SqlitePool, sqlx::Error> 
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
                 time REAL NOT NULL,
                 symbol TEXT NOT NULL,
-                agg_trade_id INTEGER NOT NULL,
                 price REAL NOT NULL,
                 quantity REAL NOT NULL,
-                first_trade_id INTEGER NOT NULL,
-                last_trade_id INTEGER NOT NULL,
                 is_buyer_maker BOOLEAN NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_agg_time ON agg_trades(time);
@@ -98,4 +99,44 @@ async fn get_monthly_pool(data_folder: &str) -> Result<SqlitePool, sqlx::Error> 
     .execute(&pool)
     .await?;
     Ok(pool)
+}
+
+async fn run_backup_script() {
+    let data_folder_env = env::var("WORKDIR").expect("WORKDIR must be set");
+    let data_folder = format!("{}/sqlitedata", data_folder_env);
+
+    let now = Utc::now();
+
+    let (prev_year, prev_month) = if now.month() == 1 {
+        (now.year() - 1, 12)
+    } else {
+        (now.year(), now.month() - 1)
+    };
+
+    let utils_path = env::var("UTILS").expect("UTILS must be set");
+
+    let result = Command::new(format!("{}/dump_db.sh", utils_path))
+        .arg(data_folder)
+        .arg(format!("crypto_{}_{:02}.db", prev_year, prev_month))
+        .output()
+        .await;
+
+    match result {
+        Ok(output) => {
+            if output.status.success() {
+                info!("Script finished successfully!");
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                info!("{}", stdout);
+            } else {
+                error!("Script failed with error code: {:?}", output.status.code());
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                error!("Error Log: {}", stderr);
+                return;
+            }
+        }
+        Err(err) => {
+            error!("Failed to execute command: {}", err);
+            return;
+        }
+    }
 }

@@ -1,6 +1,7 @@
 use sqlx::FromRow;
 
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct OrderBook {
     pub id: i32,
     pub time: f64,

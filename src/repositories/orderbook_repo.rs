@@ -16,16 +16,16 @@ impl OrderBookRepository {
         let mut tx = pool.begin().await?;
 
         for b in books {
-            sqlx::query!(
+            sqlx::query(
                 r#"
                     INSERT INTO order_books(time, symbol, bids, asks)
                     VALUES (?, ?, ?, ?)
                 "#,
-                b.time,
-                b.symbol,
-                b.bids,
-                b.asks
             )
+            .bind(b.time)
+            .bind(&b.symbol)
+            .bind(&b.bids)
+            .bind(&b.asks)
             .execute(&mut *tx)
             .await?;
         }

@@ -3,10 +3,10 @@ use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use sqlx::sqlite::SqlitePool;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 use tokio::time;
 use tokio_tungstenite::tungstenite::{Bytes, Message};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::models::OrderBookInsert;
 use crate::remote::OrderBookCombinedEvent;
@@ -27,6 +27,7 @@ impl OrderBookService {
     pub async fn start(
         self,
         rotating_pool: Arc<RotatingPool>,
+        order_tx: broadcast::Sender<Arc<OrderBookInsert>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let stream_params: Vec<String> = self
             .symbols
@@ -43,11 +44,10 @@ impl OrderBookService {
             match tokio_tungstenite::connect_async(&url).await {
                 Ok((ws_stream, _)) => {
                     let (mut write, mut read) = ws_stream.split();
-                    let (order_tx, order_rx) = mpsc::channel::<OrderBookInsert>(1000);
 
                     debug!("Setting up db_writer");
                     let pool = rotating_pool.get().await?;
-                    tokio::spawn(Self::db_writter(pool, order_rx));
+                    tokio::spawn(Self::db_writter(pool, order_tx.subscribe()));
 
                     debug!("Setting up heartbit");
                     tokio::spawn(async move {
@@ -60,17 +60,12 @@ impl OrderBookService {
 
                     while let Some(msg) = read.next().await {
                         match msg {
-                            Ok(Message::Text(ref text)) => {
-                                debug!("Receiving WebSocket text message");
-
-                                match Self::parse_trade(text) {
-                                    Ok(order) => {
-                                        debug!("Sending parsed message to db channel.");
-                                        let _ = order_tx.try_send(order);
-                                    }
-                                    Err(e) => error!("Failed to deserialize object: {}", e),
+                            Ok(Message::Text(ref text)) => match Self::parse_trade(text) {
+                                Ok(order) => {
+                                    let _ = order_tx.send(Arc::new(order));
                                 }
-                            }
+                                Err(e) => error!("Failed to deserialize object: {}", e),
+                            },
                             Ok(Message::Close(_)) => {
                                 debug!("Close message received");
                                 break;
@@ -80,7 +75,7 @@ impl OrderBookService {
                                 break;
                             }
                             _ => {
-                                debug!("Unexpected message received, continuint...");
+                                debug!("Unexpected message received, continuing...");
                                 continue;
                             }
                         }
@@ -95,24 +90,33 @@ impl OrderBookService {
     }
 
     fn parse_trade(msg: &str) -> Result<OrderBookInsert, Box<dyn std::error::Error>> {
-        debug!("Trying to deserialize agg trade object.");
         let v = serde_json::from_str::<OrderBookCombinedEvent>(msg)?;
-        debug!("Received object deserialized!");
         Ok(v.to_insertable()?)
     }
 
-    async fn db_writter(pool: SqlitePool, mut order_rx: mpsc::Receiver<OrderBookInsert>) {
+    async fn db_writter(pool: SqlitePool, mut order_rx: broadcast::Receiver<Arc<OrderBookInsert>>) {
         let mut buffer = Vec::with_capacity(200);
         let mut last_flush = Instant::now();
 
         loop {
             tokio::select! {
-                Some(order) = order_rx.recv() => {
-                    buffer.push(order);
-                    if buffer.len() >= 200 || last_flush.elapsed() >= Duration::from_millis(2000) {
-                        Self::flush_batch(&pool, &buffer).await;
-                        buffer.clear();
-                        last_flush = Instant::now();
+                result = order_rx.recv() => {
+                    match result {
+                        Ok(order) => {
+                            buffer.push((*order).clone());
+                            if buffer.len() >= 200 || last_flush.elapsed() >= Duration::from_millis(2000) {
+                                Self::flush_batch(&pool, &buffer).await;
+                                buffer.clear();
+                                last_flush = Instant::now();
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            warn!("DB Writer lagged! Skipped {} orderbook messages.", skipped);
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            debug!("Broadcast channel closed.");
+                            break;
+                        }
                     }
                 }
 
@@ -136,3 +140,4 @@ impl OrderBookService {
         }
     }
 }
+

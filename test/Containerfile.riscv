@@ -1,0 +1,75 @@
+# Dockerfile.riscv
+FROM --platform=linux/riscv64 docker.io/riscv64/debian:stable-slim
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y \
+    build-essential \
+    curl \
+    wget \
+    pkg-config \
+    libssl-dev \
+    ca-certificates \
+    sqlite3 \
+    zstd \
+    libzstd-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+
+
+# Download specific certificates for Binance
+RUN mkdir -p /usr/local/share/ca-certificates/binance && \
+    # DigiCert certificates
+    curl -sS https://cacerts.digicert.com/DigiCertGlobalRootCA.crt.pem -o /usr/local/share/ca-certificates/binance/digicert-global-root.crt && \
+    curl -sS https://cacerts.digicert.com/DigiCertGlobalRootG2.crt.pem -o /usr/local/share/ca-certificates/binance/digicert-global-root-g2.crt && \
+    # Let's Encrypt
+    curl -sS https://letsencrypt.org/certs/isrgrootx1.pem -o /usr/local/share/ca-certificates/binance/isrgrootx1.crt && \
+    curl -sS https://letsencrypt.org/certs/isrg-root-x2.pem -o /usr/local/share/ca-certificates/binance/isrg-root-x2.crt && \
+    # Amazon
+    curl -sS https://www.amazontrust.com/repository/AmazonRootCA1.pem -o /usr/local/share/ca-certificates/binance/amazon-root-ca1.crt && \
+    curl -sS https://www.amazontrust.com/repository/AmazonRootCA2.pem -o /usr/local/share/ca-certificates/binance/amazon-root-ca2.crt && \
+    # Update certificates
+    update-ca-certificates --fresh
+
+# Set environment variables
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_DIR=/etc/ssl/certs
+ENV OPENSSL_DIR=/usr
+ENV OPENSSL_INCLUDE_DIR=/usr/include/openssl
+ENV OPENSSL_LIB_DIR=/usr/lib/riscv64-linux-gnu
+
+# Test SSL connection
+RUN curl -sS https://api.binance.com/api/v3/ping > /dev/null && echo "SSL test passed" || echo "SSL test failed"
+
+# Create a non-root user (matching your host username if desired)
+ARG USERNAME=auco1120
+ARG USER_UID=1000
+ARG USER_GID=1000
+
+# Create user and group (check if they exist first)
+RUN groupadd --gid ${USER_GID} ${USERNAME} 2>/dev/null || true && \
+    useradd --uid ${USER_UID} --gid ${USER_GID} -m -s /bin/bash ${USERNAME} 2>/dev/null || true
+
+# Add user to sudoers (passwordless for convenience)
+RUN echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# Create project directory in user's home
+RUN mkdir -p /home/${USERNAME}/project && \
+    chown -R ${USER_UID}:${USER_GID} /home/${USERNAME}
+
+# Switch to non-root user
+USER ${USERNAME}
+WORKDIR /home/${USERNAME}/project
+
+# Setup environment
+ENV PATH="/home/${USERNAME}/.local/bin:${PATH}"
+ENV HOME="/home/${USERNAME}"
+
+# Create useful aliases
+RUN echo 'alias ll="ls -la"' >> ~/.bashrc && \
+    echo 'alias ..="cd .."' >> ~/.bashrc && \
+    echo 'alias c="clear"' >> ~/.bashrc && \
+    echo 'export PS1="\[\e[32m\]\u@riscv:\w\[\e[0m\]\$ "' >> ~/.bashrc
+
+CMD ["/bin/bash"]

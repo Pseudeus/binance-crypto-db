@@ -3,10 +3,10 @@ use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use sqlx::sqlite::SqlitePool;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 use tokio::time;
 use tokio_tungstenite::tungstenite::{Bytes, Message};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::db::RotatingPool;
 use crate::models::AggTradeInsert;
@@ -27,6 +27,7 @@ impl AggTradeService {
     pub async fn start(
         self,
         rotating_pool: Arc<RotatingPool>,
+        trade_tx: broadcast::Sender<Arc<AggTradeInsert>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let streams: Vec<String> = self
             .symbols
@@ -43,11 +44,10 @@ impl AggTradeService {
             match tokio_tungstenite::connect_async(&url).await {
                 Ok((ws_stream, _)) => {
                     let (mut write, mut read) = ws_stream.split();
-                    let (trade_tx, trade_rx) = mpsc::channel::<AggTradeInsert>(5000);
 
                     debug!("Setting up db_writer");
                     let pool = rotating_pool.get().await?;
-                    tokio::spawn(Self::db_writer(pool, trade_rx));
+                    tokio::spawn(Self::db_writer(pool, trade_tx.subscribe()));
 
                     debug!("Setting up heartbit");
                     tokio::spawn(async move {
@@ -61,12 +61,10 @@ impl AggTradeService {
                     while let Some(msg) = read.next().await {
                         match msg {
                             Ok(Message::Text(ref text)) => {
-                                debug!("Receiving webSocket text message");
-
                                 match Self::parse_trade(text) {
                                     Ok(trade) => {
-                                        debug!("Sending parsed message to db channel.");
-                                        let _ = trade_tx.try_send(trade);
+                                        // Broadcast the message. We don't care about the number of receivers here.
+                                        let _ = trade_tx.send(Arc::new(trade));
                                     }
                                     Err(e) => error!("Failed to deserialize object: {}", e),
                                 }
@@ -95,24 +93,36 @@ impl AggTradeService {
     }
 
     fn parse_trade(msg: &str) -> Result<AggTradeInsert, Box<dyn std::error::Error>> {
-        debug!("Trying to deserialize agg trade object.");
         let v = serde_json::from_str::<AggTradeCombinedEvent>(msg)?;
-        debug!("Received objec deserialized!");
         Ok(v.to_insertable()?)
     }
 
-    async fn db_writer(get_pool: SqlitePool, mut trade_rx: mpsc::Receiver<AggTradeInsert>) {
+    async fn db_writer(
+        get_pool: SqlitePool,
+        mut trade_rx: broadcast::Receiver<Arc<AggTradeInsert>>,
+    ) {
         let mut buffer = Vec::with_capacity(1000);
         let mut last_flush = Instant::now();
 
         loop {
             tokio::select! {
-                Some(trade) = trade_rx.recv() => {
-                    buffer.push(trade);
-                    if buffer.len() >= 1000 || last_flush.elapsed() >= Duration::from_millis(5000) {
-                        Self::flush_batch(&get_pool, &buffer).await;
-                        buffer.clear();
-                        last_flush = Instant::now();
+                result = trade_rx.recv() => {
+                    match result {
+                        Ok(trade) => {
+                            buffer.push((*trade).clone());
+                            if buffer.len() >= 1000 || last_flush.elapsed() >= Duration::from_millis(5000) {
+                                Self::flush_batch(&get_pool, &buffer).await;
+                                buffer.clear();
+                                last_flush = Instant::now();
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            warn!("DB Writer lagged! Skipped {} messages.", skipped);
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            debug!("Broadcast channel closed.");
+                            break;
+                        }
                     }
                 }
 

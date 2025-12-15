@@ -16,22 +16,18 @@ impl AggTradeRepository {
         let mut tx = pool.begin().await?;
 
         for trade in trades {
-            sqlx::query!(
+            sqlx::query(
                 r#"
                     INSERT INTO agg_trades (
-                        time, symbol, agg_trade_id, price, quantity,
-                        first_trade_id, last_trade_id, is_buyer_maker
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        time, symbol, price, quantity, is_buyer_maker
+                    ) VALUES (?, ?, ?, ?, ?)
                 "#,
-                trade.time,
-                trade.symbol,
-                trade.agg_trade_id,
-                trade.price,
-                trade.quantity,
-                trade.first_trade_id,
-                trade.last_trade_id,
-                trade.is_buyer_maker
             )
+            .bind(trade.time)
+            .bind(&trade.symbol)
+            .bind(trade.price)
+            .bind(trade.quantity)
+            .bind(trade.is_buyer_maker)
             .execute(&mut *tx)
             .await?;
         }
