@@ -22,3 +22,10 @@ tracing = "0.1.43"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 tract-onnx = "0.22.0"
 zstd = { version = "0.13.3", default-features = false, features = ["experimental"] }
+teloxide = { version = "0.13", features = ["macros"] }
+reqwest = { version = "0.12", features = ["json"] }
+hmac = "0.12.1"
+sha2 = "0.10.8"
+hex = "0.4.3"
+binance-sdk = { version = "35.0.0", features = ["spot"] }
+anyhow = "1.0.100"

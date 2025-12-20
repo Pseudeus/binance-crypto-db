@@ -38,7 +38,7 @@ impl InferenceEngine {
         Ok(model)
     }
 
-    pub fn predict(&self, features: &[f32]) -> Result<f32, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn predict(&self, features: &[f32]) -> Result<InferenceResult, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(model) = &self.model {
             // Create input tensor (1, N)
             let tensor = tract_ndarray::Array::from_shape_vec((1, features.len()), features.to_vec())?
@@ -46,15 +46,38 @@ impl InferenceEngine {
 
             let result = model.run(tvec!(tensor.into()))?;
             
-            // Assuming output is a single probability scalar [Batch, 1] or just [1]
-            let output_tensor = result[0].to_array_view::<f32>()?;
-            let probability = output_tensor.iter().next().copied().unwrap_or(0.5);
-            
-            Ok(probability)
+            // Output is [1, 3] Logits (Hold, Buy, Sell)
+            let logits = result[0].to_array_view::<f32>()?;
+            let logits_slice = logits.as_slice().ok_or("Failed to get logits slice")?;
+
+            // Softmax
+            let max_logit = logits_slice.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+            let exp_sum: f32 = logits_slice.iter().map(|&x| (x - max_logit).exp()).sum();
+            let probs: Vec<f32> = logits_slice.iter().map(|&x| (x - max_logit).exp() / exp_sum).collect();
+
+            // ArgMax
+            let mut max_index = 0;
+            let mut max_prob = 0.0;
+            for (i, &prob) in probs.iter().enumerate() {
+                if prob > max_prob {
+                    max_prob = prob;
+                    max_index = i;
+                }
+            }
+
+            Ok(InferenceResult {
+                class: max_index,
+                confidence: max_prob,
+            })
         } else {
-            // Dummy logic for simulation: 
-            // Return 0.5 (Neutral)
-            Ok(0.5)
+            // Dummy logic for simulation
+            Ok(InferenceResult { class: 0, confidence: 0.0 })
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct InferenceResult {
+    pub class: usize, // 0=Hold, 1=Buy, 2=Sell
+    pub confidence: f32,
 }

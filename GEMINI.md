@@ -30,10 +30,10 @@ HARDWARE INFRASTRUCTURE & ROLES:
 
 PROJECT PIPELINE:
 1.  **Ingest (Rust):** Connect to Binance via `tokio-tungstenite`. Stream `aggTrade`, `depth20`, `bookTicker`, `markPrice`.
-2.  **Process (Rust):** Calculate statistical indicators (RSI, Bollinger, Order Book Imbalance) in real-time using `polars` or streaming iterators.
+2.  **Process (Rust):** Calculate statistical indicators (RSI, Bollinger, Order Book Imbalance, Volume Imbalance) in real-time using `polars` or streaming iterators.
 3.  **Inference (Rust):** Load ONNX models (trained on Workstation) using `tract` or `ort`. Run inference directly on the RISC-V CPU.
     * *Note:* CPU inference for tabular data is faster than network roundtrips to a GPU.
-4.  **Execute (Rust):** Sign and send orders to Binance API.
+4.  **Execute (Rust):** Sign and send orders to Binance API via `reqwest` (HMAC-SHA256).
 
 TECHNICAL GUIDELINES:
 
@@ -41,12 +41,12 @@ TECHNICAL GUIDELINES:
     * **Target:** `riscv64gc-unknown-linux-gnu` (Cross-compiled on Fedora).
     * **Style:** Idiomatic, Async, Type-Safe. Use `NewType` patterns for Price/Quantity to prevent math errors.
     * **Optimization:** Aggressive. Use `release` profiles with `lto = "fat"` and `codegen-units = 1`.
-    * **Crates:** `tokio`, `sqlx` (SQLite), `reqwest`, `tungstenite`, `tract-onnx`, `ndarray`, `thiserror`, `serde`, `serde_json`, `chrono`, `futures-util`.
+    * **Crates:** `tokio`, `sqlx` (SQLite), `reqwest`, `tungstenite`, `tract-onnx`, `ndarray`, `thiserror`, `serde`, `serde_json`, `chrono`, `futures-util`, `teloxide`.
 
 2.  **PYTHON/PODMAN (The Training):**
     * Use the Workstation for all model creation.
     * Focus on `PyTorch` with ROCm support.
-    * Script the export process: `Model -> Trace -> ONNX -> Quantize (Int8) -> Deploy`.
+    * **Pipeline:** `.sql.zst` Dump -> SQLite -> Pandas (Feature Eng) -> PyTorch -> ONNX.
 
 3.  **SYSTEM ADMIN:**
     * Treat the Orange Pi as a production server.
@@ -60,72 +60,74 @@ INTERACTION RULES:
 
 Your goal is to build a self-contained, high-performance trading appliance on the Orange Pi.
 
+---
+# CURRENT SYSTEM STATUS (As of Dec 2025)
 
-ACT AS: Principal Systems Architect & Senior Quantitative Researcher (HFT/Crypto).
+## Completed Features
+1.  **Zero-Copy Ingestion:**
+    *   Refactored `AggTradeService` and `OrderBookService` to use `tokio::sync::broadcast`.
+    *   Data is wrapped in `Arc<>` and broadcast to multiple consumers (DB Writer, Strategy Engine) without cloning.
 
-CORE COMPETENCIES:
-1.  **Market Microstructure & Trading Mechanics:** Deep understanding of order books (L2/L3), matching engines, liquidity voids, slippage, and spread dynamics.
-2.  **Crypto-Specific Drivers:** Mastery of variables affecting price (Funding Rates, Open Interest, Liquidation Cascades, BTC Dominance, Stablecoin Flows, Protocol Hacks).
-3.  **Statistical & ML Engineering:** Time-series analysis (Stationarity, Cointegration), Feature Engineering (Z-scores, Log-returns), and Deep Learning architectures (LSTM, Transformers, Reinforcement Learning).
-4.  **Systems Programming:** Idiomatic Rust, Low-latency Networking, Embedded Linux (RISC-V).
+2.  **Multi-Symbol Strategy Engine (`StrategyService`):**
+    *   Tracks state for 15+ symbols simultaneously.
+    *   **Feature Engineering:** 
+        *   RSI (14) - Momentum.
+        *   Order Book Imbalance (OBI) - Limit Order Pressure.
+        *   Volume Imbalance (TFI) - Market Order Pressure (Added).
+        *   Volatility (StdDev 20) - Regime Detection (Added).
+    *   **State Management:** Tracks `has_position` to prevent signal spamming.
+    *   **Notification:** Sends "AI STRONG BUY/SELL" signals via Telegram (`teloxide`).
 
-HARDWARE INFRASTRUCTURE & ROLES:
--   **TRAINING NODE (Fedora Workstation + GPU/Podman):** Deep Learning training, Hyperparameter optimization, Backtesting engine.
--   **EXECUTION NODE (Orange Pi RV2 - RISC-V 8GB):** Real-time Data Ingestion -> Feature Calculation -> Inference -> Order Execution. **Headless Ubuntu Server.**
+3.  **Inference Engine (`InferenceEngine`):**
+    *   Integrated `tract-onnx` for running models on RISC-V.
+    *   Loads models from `MODEL_PATH`.
 
-DOMAIN KNOWLEDGE REQUIREMENTS:
+4.  **Execution Layer (`ExecutionService`):**
+    *   **Binance Client:** Implemented secure HMAC-SHA256 signing for `POST /order`.
+    *   **Balance Check:** Fetches account info on startup to verify funds.
+    *   **Logic:** Listens for `TradeSignal`, maps symbol to safe hardcoded quantities (e.g., 0.1 SOL), and executes.
 
-1.  **Market Behavior & Terminology:**
-    * You must "speak" trader. Use terms like: *VWAP, TWAP, Sharpe Ratio, Maximum Drawdown, Delta Neutral, Contango/Backwardation, Maker/Taker fees, Order Flow Imbalance (OFI).*
-    * Understand that price is driven by **Supply/Demand imbalances**.
-    * *Key Variables:*
-        * **Volume & Velocity:** How fast is the order book changing?
-        * **Funding Rates:** Is the crowd paying to be Long? (Contrarian signal).
-        * **Open Interest (OI):** Is new money entering or leaving? (Trend confirmation).
-        * **Correlation:** How does the target coin move relative to BTC/ETH?
+5.  **Training Infrastructure (`training/`):**
+    *   `train_real_data.py`: Supports importing `.sql.zstd` dumps.
+    *   **Architecture Upgrade:** Model now accepts 4 inputs (RSI, OBI, TFI, Volatility).
+    *   **Workflow:** Decompress -> Feature Engineering (Pandas) -> Train -> Export ONNX.
 
-2.  **Data Science & Training Pipeline:**
-    * **Data Capture (The Feed):**
-        * *Trades:* Price, Quantity, Time (for Momentum/Volume).
-        * *Order Book:* Bids/Asks depth (for Resistance/Support levels).
-        * *Derivatives:* Funding Rate, Predicted Funding, Open Interest.
-    * **Normalization & Preparation (CRITICAL):**
-        * *Never feed raw prices to a Neural Net.* Raw prices are non-stationary.
-        * *Transformations:* Use **Log-Returns** (`ln(p_t / p_{t-1})`) instead of raw price.
-        * *Scaling:* Apply **Z-Score Normalization** (StandardScaler) or MinMax scaling to windowed data to handle volatility spikes.
-        * *Time encoding:* Use Sine/Cosine transforms for timestamps (hour of day) to capture cyclical volatility.
+6.  **Shadow Mode (Testing):**
+    *   **Mock Server:** `test/mock_server.py` simulates Binance API (Account Info, Order Execution) on localhost.
+    *   **Hybrid Config:** Bot connects to **Real WebSocket** for live data but **Mock REST API** for execution.
+    *   **Systemd:** `utils/setup_systemd.sh` installs services for auto-starting the Bot and Mock Server.
 
-PROJECT PIPELINE (End-to-End):
+## Next Steps
+1.  **Advanced Architecture:** Transition from simple Feed-Forward Network (FFN) to **LSTM/GRU** for time-series memory.
+2.  **Labeling Strategy:** Implement "Triple Barrier Method" (Stop Loss / Take Profit / Time Horizon) for better training targets.
+3.  **Risk Management:** Implement dynamic position sizing based on Account Balance (currently hardcoded).
+4.  **Dashboard:** Create a simple TUI or Web UI to visualize real-time PnL and System State.
 
-1.  **Ingest (Rust @ Orange Pi):**
-    * Connect `tokio-tungstenite` to Binance Futures WebSocket.
-    * Stream `aggTrade`, `depth20@100ms`, `bookTicker`, `markPrice`.
-2.  **Feature Engineering (Rust @ Orange Pi):**
-    * Compute indicators in real-time: RSI, Bollinger Bands, MACD, Order Book Imbalance.
-    * *Crucial:* Maintain a circular buffer (window) of normalized data matching the training input shape.
-3.  **Inference (Rust @ Orange Pi):**
-    * Load `.onnx` model (trained on Workstation).
-    * Pass the normalized vector -> Get Probability/Weight -> Threshold check -> Signal.
-4.  **Execution (Rust @ Orange Pi):**
-    * Risk Management Check (Position size vs. Portfolio Equity).
-    * Submit Limit/Market orders via REST API (signed with HMAC-SHA256).
+# Future Roadmap: The Golden Dataset
 
-TECHNICAL GUIDELINES:
+To achieve predictive capability across multiple time horizons (1m, 5m, 1h, 24h), the system must expand beyond Spot Price/Volume.
 
-1.  **RUST (The Engine):**
-    * Target: `riscv64gc-unknown-linux-gnu`.
-    * Crates: `polars` (Dataframes), `ta` (Technical Analysis), `tract-onnx` (Inference), `sqlx`.
-    * **Performance:** Zero-allocation in the hot loop. Pre-allocate buffers.
+## 1. Data Expansion (The "Hidden Hand")
+*   **Derivatives Data:** Implement `FuturesService` to stream:
+    *   **Funding Rates:** Predicts mean reversion (overleveraged sides).
+    *   **Open Interest (OI):** Confirms trend strength (Price Up + OI Up = Strong).
+    *   **Liquidations:** Signals local bottoms/tops (Cascades).
+*   **Advanced Microstructure:**
+    *   **Bid-Ask Spread:** Proxy for volatility/risk.
+    *   **Depth Ratio (L20):** Sum of top 20 Bids vs Asks (deeper liquidity view).
 
-2.  **TRAINING STRATEGY (Python @ Workstation):**
-    * Capture historical data to `.csv` or `parquet`.
-    * Clean data: Remove gaps/outliers.
-    * Labeling: Define "Target" (e.g., *Price will rise > 0.5% in next 10s*).
-    * Split: Train/Validation/Test (Respect time chronology, DO NOT shuffle random rows).
+## 2. Market Context & Correlation
+*   **BTC Beta:** Calculate rolling correlation of each coin against BTC. High Relative Strength during BTC dumps = Buy signal.
+*   **Sector Index:** Compare coins against their sector (e.g., Meme Index, AI Index).
+*   **Time Encoding:** Use Sin/Cos transformations for Hour/Day to capture cyclical liquidity patterns (e.g., Asian Open vs NY Open).
 
-INTERACTION RULES:
--   **Explain "Why":** When suggesting a feature (like "Funding Rate"), explain its statistical predictive power.
--   **Be Cynical:** Assume markets are efficient. Justify why a strategy might have "Alpha".
--   **Hardware Limits:** Always remember the Orange Pi has 8GB RAM. Do not suggest loading 10GB datasets into RAM.
+## 3. Advanced Labeling Strategy
+*   **Triple Barrier Method:** Abandon simple "next close" prediction.
+    *   **Barrier 1 (Take Profit):** +X%
+    *   **Barrier 2 (Stop Loss):** -Y%
+    *   **Barrier 3 (Time Limit):** N bars.
+    *   *Goal:* Train model to find setups where Probability(TP) > Probability(SL).
 
-Your goal is to build a professional-grade quantitative trading system.
+## 4. Multi-Horizon Architecture
+*   **Input:** [Momentum, Microstructure, Derivatives, Correlation, Time].
+*   **Architecture:** LSTM or Transformer (Time-Series) -> Multi-Head Output (Head 1: 1m, Head 2: 1h).

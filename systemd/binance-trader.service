@@ -1,0 +1,18 @@
+[Unit]
+Description=Binance HFT Trader (Rust)
+After=network.target binance-mock.service
+Requires=binance-mock.service
+
+[Service]
+Type=simple
+User=auco1120
+WorkingDirectory=/home/auco1120/Documents/Rust/binance-crypto-db
+# Assuming the binary is already built with --release
+ExecStart=/home/auco1120/Documents/Rust/binance-crypto-db/target/release/binance-crypto-db
+Restart=always
+RestartSec=10
+# Environment variables can also be set here if needed, but the app reads .env
+# Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target

@@ -48,26 +48,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (trade_tx, _trade_rx) = broadcast::channel::<Arc<AggTradeInsert>>(10000);
     // Create the broadcast channel for OrderBooks
     let (order_tx, _order_rx) = broadcast::channel::<Arc<crate::models::OrderBookInsert>>(1000);
+    // Create the broadcast channel for Notifications
+    let (notify_tx, notify_rx) = broadcast::channel::<String>(100);
+    // Create the broadcast channel for Execution
+    let (exec_tx, exec_rx) = broadcast::channel::<crate::models::TradeSignal>(100);
 
-        let agg_svc = services::AggTradeService::new(SYMBOLS);
-        let order_svc = services::OrderBookService::new(SYMBOLS);
-        
-        // Configurable Model Path
-        let model_path = env::var("MODEL_PATH").unwrap_or_else(|_| "models/strategy.onnx".to_string());
-        debug!("Using AI Model: {}", model_path);
-    
-        // Initialize Strategy Service (Process Phase)
-        // Tracks all 15 symbols with a window size of 100
-        let strategy_svc = services::StrategyService::new(SYMBOLS, 100, &model_path);
-    
-        let agg_handle = tokio::spawn(agg_svc.start(rotating_pool.clone(), trade_tx.clone()));    let order_handle = tokio::spawn(order_svc.start(rotating_pool, order_tx.clone()));
+    let agg_svc = services::AggTradeService::new(SYMBOLS);
+    let order_svc = services::OrderBookService::new(SYMBOLS);
+    let telegram_svc = services::TelegramService::new();
+    let execution_svc = services::ExecutionService::new();
+
+    // Configurable Model Path
+    let model_path = env::var("MODEL_PATH").unwrap_or_else(|_| "models/strategy.onnx".to_string());
+    debug!("Using AI Model: {}", model_path);
+
+    // Initialize Strategy Service (Process Phase)
+    // Tracks all 15 symbols with a window size of 100
+    let strategy_svc = services::StrategyService::new(SYMBOLS, 100, &model_path)
+        .with_notifier(notify_tx.clone())
+        .with_executor(exec_tx.clone());
+
+    let agg_handle = tokio::spawn(agg_svc.start(rotating_pool.clone(), trade_tx.clone()));
+    let order_handle = tokio::spawn(order_svc.start(rotating_pool, order_tx.clone()));
     let strategy_handle =
         tokio::spawn(strategy_svc.start(trade_tx.subscribe(), order_tx.subscribe()));
+    let telegram_handle = tokio::spawn(telegram_svc.start(notify_rx));
+    let execution_handle = tokio::spawn(execution_svc.start(exec_rx));
 
     tokio::select! {
         _ = agg_handle => error!("AggTrade service stopped"),
         _ = order_handle => error!("OrderBook service stopped"),
         _ = strategy_handle => error!("Strategy service stopped"),
+        _ = telegram_handle => error!("Telegram service stopped"),
+        _ = execution_handle => error!("Execution service stopped"),
     }
+
     Ok(())
 }

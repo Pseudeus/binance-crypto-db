@@ -9,9 +9,9 @@ use tokio_tungstenite::tungstenite::{Bytes, Message};
 use tracing::{debug, error, info, warn};
 
 use crate::models::OrderBookInsert;
-use crate::remote::OrderBookCombinedEvent;
+use crate::db::RotatingPool;
+use crate::remote::{get_ws_base_url, OrderBookCombinedEvent};
 use crate::repositories::orderbook_repo::OrderBookRepository;
-use crate::{db::RotatingPool, remote::BASE_URL};
 
 pub struct OrderBookService {
     symbols: Vec<String>,
@@ -20,25 +20,25 @@ pub struct OrderBookService {
 impl OrderBookService {
     pub fn new(symbols: &[&str]) -> Self {
         Self {
-            symbols: symbols.iter().map(|s| s.to_lowercase()).collect(),
+            symbols: symbols.iter().map(|s| s.to_string()).collect(),
         }
     }
 
     pub async fn start(
         self,
         rotating_pool: Arc<RotatingPool>,
-        order_tx: broadcast::Sender<Arc<OrderBookInsert>>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let stream_params: Vec<String> = self
-            .symbols
-            .iter()
-            .map(|s| format!("{}@depth20@100ms", s))
+        order_tx: broadcast::Sender<Arc<OrderBookInsert>>
+    ) {
+        info!("Starting OrderBook Ingestion Service");
+
+        let stream_params: Vec<String> = self.symbols.iter()
+            .map(|s| format!("{}@depth20@100ms", s.to_lowercase()))
             .collect();
+        
+        // Use the configured WS URL
+        let url = format!("{}{}", get_ws_base_url(), stream_params.join("/"));
 
-        let url = format!("{}{}", BASE_URL, stream_params.join("/"));
-
-        debug!("Connecting to web socket: {}", url);
-        info!("Starting orderbook service for: {:?}", self.symbols);
+        info!("Connecting to: {}", url);
 
         loop {
             match tokio_tungstenite::connect_async(&url).await {
@@ -46,7 +46,15 @@ impl OrderBookService {
                     let (mut write, mut read) = ws_stream.split();
 
                     debug!("Setting up db_writer");
-                    let pool = rotating_pool.get().await?;
+                    let pool = match rotating_pool.get().await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            error!("Failed to get DB pool: {}. Retrying...", e);
+                            time::sleep(Duration::from_secs(5)).await;
+                            continue;
+                        }
+                    };
+                    
                     tokio::spawn(Self::db_writter(pool, order_tx.subscribe()));
 
                     debug!("Setting up heartbit");
