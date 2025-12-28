@@ -1,7 +1,7 @@
 use tracing_subscriber::EnvFilter;
 
 pub fn setup_logger() {
-    let filter = EnvFilter::new("info");
+    let filter = EnvFilter::new("debug").add_directive("sqlx=warn".parse().unwrap());
 
     tracing_subscriber::fmt()
         // .with_file(true)

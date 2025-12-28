@@ -2,6 +2,7 @@
 # Debug files
 target/
 **/*.rs.bk
+*.zst
 
 # Build outputs
 *.o

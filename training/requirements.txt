@@ -1,0 +1,8 @@
+# torch  <-- Provided by rocm/pytorch base image
+numpy
+pandas
+pandas_ta
+requests
+tqdm
+zstandard
+onnx

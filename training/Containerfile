@@ -1,0 +1,28 @@
+# Use the official AMD ROCm PyTorch image
+# This contains the drivers, libraries, and GPU-optimized PyTorch
+FROM rocm/pytorch:latest
+
+WORKDIR /app
+
+# Install system dependencies if needed (zstandard might need build tools)
+# The base image is usually Ubuntu-based.
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libsqlite3-dev \
+    sqlite3 \
+    zstd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements (excluding torch)
+COPY requirements.txt .
+
+# Install Python dependencies
+# --upgrade is useful to ensure we don't have conflicts with pre-installed older libs
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy the training scripts
+COPY train_real_data.py .
+
+# Default command
+CMD ["python", "train_real_data.py"]

@@ -1,0 +1,14 @@
+[Unit]
+Description=Binance Mock API Server
+After=network.target
+
+[Service]
+Type=simple
+User=auco1120
+WorkingDirectory=/home/auco1120/Documents/Rust/binance-crypto-db
+ExecStart=/usr/bin/python3 test/mock_server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
