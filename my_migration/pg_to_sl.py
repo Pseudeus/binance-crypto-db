@@ -6,7 +6,7 @@ import psycopg2
 from psycopg2.extras import Json
 
 # --- CONFIGURATION ---
-PG_DSN = "dbname=crypto_data user=rusted_crab password=iyu+k7TD?pJUFLcR9bQ.-9jf host=192.168.2.226 port=5432"
+PG_DSN = "dbname=crypto_data user=rusted_crab password=** host=192.168.2.226 port=5432"
 SQLITE_DB = "/home/auco1120/Documents/Rust/binance-crypto-db/my_migration/crypto_2025_12.db"  # MAKE SURE THIS IS ON YOUR WD BLACK DRIVE
 BATCH_SIZE = 20000
 
