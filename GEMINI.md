@@ -57,6 +57,8 @@ INTERACTION RULES:
 -   **Architecture Authority:** If the user suggests moving inference back to the Jetson, strictly advise against it due to the "Latency vs. Bandwidth" trade-off and RAM risks.
 -   **Code Quality:** Production-ready Rust. No `unwrap()` in the main loop. Handle all `Result`s.
 -   **Context:** Always assume models are trained externally and imported as files.
+-   **Learning Mode:** Do not perform tasks as a black box. Instead, provide detailed clues and discuss the trade-offs of different decision paths to facilitate learning.
+-   **User-Driven Implementation:** I want to implement all changes myself to maximize learning. Please provide suggestions and discuss trade-offs, but do not make moves by yourself.
 
 Your goal is to build a self-contained, high-performance trading appliance on the Orange Pi.
 
@@ -87,7 +89,7 @@ Your goal is to build a self-contained, high-performance trading appliance on th
     *   **Balance Check:** Fetches account info on startup to verify funds.
     *   **Logic:** Listens for `TradeSignal`, maps symbol to safe hardcoded quantities (e.g., 0.1 SOL), and executes.
 
-5.  **Training Infrastructure (`training/`):**
+5.  **Training Infrastructure (`training/`):)
     *   `train_real_data.py`: Supports importing `.sql.zstd` dumps.
     *   **Architecture Upgrade:** Model now accepts 4 inputs (RSI, OBI, TFI, Volatility).
     *   **Workflow:** Decompress -> Feature Engineering (Pandas) -> Train -> Export ONNX.
@@ -121,13 +123,19 @@ To achieve predictive capability across multiple time horizons (1m, 5m, 1h, 24h)
 *   **Sector Index:** Compare coins against their sector (e.g., Meme Index, AI Index).
 *   **Time Encoding:** Use Sin/Cos transformations for Hour/Day to capture cyclical liquidity patterns (e.g., Asian Open vs NY Open).
 
-## 3. Advanced Labeling Strategy
-*   **Triple Barrier Method:** Abandon simple "next close" prediction.
-    *   **Barrier 1 (Take Profit):** +X%
-    *   **Barrier 2 (Stop Loss):** -Y%
-    *   **Barrier 3 (Time Limit):** N bars.
-    *   *Goal:* Train model to find setups where Probability(TP) > Probability(SL).
-
-## 4. Multi-Horizon Architecture
-*   **Input:** [Momentum, Microstructure, Derivatives, Correlation, Time].
-*   **Architecture:** LSTM or Transformer (Time-Series) -> Multi-Head Output (Head 1: 1m, Head 2: 1h).
+<h2>3. Advanced Labeling Strategy</h2>
+<ul>
+<li><strong>Triple Barrier Method:</strong> Abandon simple "next close" prediction.
+<ul>
+<li><strong>Barrier 1 (Take Profit):</strong> +X%</li>
+<li><strong>Barrier 2 (Stop Loss):</strong> -Y%</li>
+<li><strong>Barrier 3 (Time Limit):</strong> N bars.</li>
+<li><em>Goal:</em> Train model to find setups where Probability(TP) > Probability(SL).</li>
+</ul>
+</li>
+</ul>
+<h2>4. Multi-Horizon Architecture</h2>
+<ul>
+<li><strong>Input:</strong> [Momentum, Microstructure, Derivatives, Correlation, Time].</li>
+<li><strong>Architecture:</strong> LSTM or Transformer (Time-Series) -> Multi-Head Output (Head 1: 1m, Head 2: 1h).</li>
+</ul>

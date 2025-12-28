@@ -3,6 +3,10 @@ name = "binance-crypto-db"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
 [dependencies]
 chrono = { version = "0.4.42", features = ["serde"] }
 dotenvy = "0.15.7"
@@ -27,5 +31,5 @@ reqwest = { version = "0.12", features = ["json"] }
 hmac = "0.12.1"
 sha2 = "0.10.8"
 hex = "0.4.3"
-binance-sdk = { version = "35.0.0", features = ["spot"] }
 anyhow = "1.0.100"
+async-trait = "0.1.89"

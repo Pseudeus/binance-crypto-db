@@ -14,7 +14,7 @@ pub struct RotatingPool {
 
 impl RotatingPool {
     pub async fn new(data_folder: String) -> Result<Self, sqlx::Error> {
-        let pool = get_monthly_pool(&data_folder).await?;
+        let pool = get_weekly_pool(&data_folder).await?;
         let packed = Self::current_packed();
         Ok(Self {
             data_folder,
@@ -23,8 +23,8 @@ impl RotatingPool {
     }
 
     fn current_packed() -> u32 {
-        let now = Utc::now();
-        (now.year() as u32) << 4 | (now.month() & 0x0f)
+        let now = Utc::now().iso_week();
+        (now.year() as u32) << 6 | (now.week() & 0x3f)
     }
 
     pub async fn get(&self) -> Result<SqlitePool, sqlx::Error> {
@@ -40,7 +40,7 @@ impl RotatingPool {
         let (current_packed, _) = *write;
 
         if current_packed != Self::current_packed() {
-            let new_pool = get_monthly_pool(&self.data_folder).await?;
+            let new_pool = get_weekly_pool(&self.data_folder).await?;
             *write = (Self::current_packed(), new_pool);
             tokio::spawn(async { run_backup_script().await });
         }
@@ -48,16 +48,16 @@ impl RotatingPool {
     }
 }
 
-async fn get_monthly_pool(data_folder: &str) -> Result<SqlitePool, sqlx::Error> {
+async fn get_weekly_pool(data_folder: &str) -> Result<SqlitePool, sqlx::Error> {
     let current_db_path = format!("{}/sqlitedata/current", data_folder);
     std::fs::create_dir_all(&current_db_path)?;
 
-    let now = Utc::now();
+    let now = Utc::now().iso_week();
     let db_filename = format!(
         "{}/crypto_{}_{:02}.db",
         current_db_path,
         now.year(),
-        now.month()
+        now.week()
     );
 
     let options = SqliteConnectOptions::from_str(&format!("sqlite:{}", db_filename))?
@@ -82,7 +82,7 @@ async fn get_monthly_pool(data_folder: &str) -> Result<SqlitePool, sqlx::Error> 
                 asks BLOB NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_time ON order_books(time);
-            CREATE INDEX IF NOT EXISTS idx_symbol ON order_books(symbol);
+            CREATE INDEX IF NOT EXISTS idx_symbol_time ON order_books(symbol, time);
 
             CREATE TABLE IF NOT EXISTS agg_trades(
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -92,8 +92,23 @@ async fn get_monthly_pool(data_folder: &str) -> Result<SqlitePool, sqlx::Error> 
                 quantity REAL NOT NULL,
                 is_buyer_maker BOOLEAN NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_agg_time ON agg_trades(time);
             CREATE INDEX IF NOT EXISTS idx_agg_symbol_time ON agg_trades(symbol, time);
+
+            CREATE TABLE IF NOT EXISTS klines(
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                symbol TEXT NOT NULL,
+                interval TEXT NOT NULL,
+                start_time INTEGER NOT NULL,
+                close_time INTEGER NOT NULL,
+                open_price REAL NOT NULL,
+                close_price REAL NOT NULL,
+                high_price REAL NOT NULL,
+                low_price REAL NOT NULL,
+                volume REAL NOT NULL,
+                no_of_trades INTEGER NOT NULL,
+                taker_buy_vol REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_klines_symbol_interval_starttime ON klines(symbol, interval, start_time);
         "#,
     )
     .execute(&pool)
@@ -105,19 +120,19 @@ async fn run_backup_script() {
     let data_folder_env = env::var("WORKDIR").expect("WORKDIR must be set");
     let data_folder = format!("{}/sqlitedata", data_folder_env);
 
-    let now = Utc::now();
+    let now = Utc::now().iso_week();
 
-    let (prev_year, prev_month) = if now.month() == 1 {
-        (now.year() - 1, 12)
+    let (prev_year, prev_week) = if now.week() == 1 {
+        (now.year() - 1, 53)
     } else {
-        (now.year(), now.month() - 1)
+        (now.year(), now.week() - 1)
     };
 
     let utils_path = env::var("UTILS").expect("UTILS must be set");
 
     let result = Command::new(format!("{}/dump_db.sh", utils_path))
         .arg(data_folder)
-        .arg(format!("crypto_{}_{:02}.db", prev_year, prev_month))
+        .arg(format!("crypto_{}_{:02}.db", prev_year, prev_week))
         .output()
         .await;
 

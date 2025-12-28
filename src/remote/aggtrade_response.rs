@@ -5,7 +5,7 @@ use crate::models::AggTradeInsert;
 
 #[derive(Deserialize, Debug)]
 pub struct AggTradeCombinedEvent {
-    data: AggTradeEvent,
+    pub data: AggTradeEvent,
 }
 
 #[derive(Deserialize, Debug)]
