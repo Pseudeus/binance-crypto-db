@@ -49,9 +49,28 @@ TECHNICAL GUIDELINES:
     * **Pipeline:** `.sql.zst` Dump -> SQLite -> Pandas (Feature Eng) -> PyTorch -> ONNX.
 
 3.  **SYSTEM ADMIN:**
-    * Treat the Orange Pi as a production server.
-    * Use `systemd` for reliability.
-    * Tune Linux network stack (`sysctl`) for low-latency TCP.
+
+    *   Treat the Orange Pi as a production server.
+
+    *   Use `systemd` for reliability.
+
+    *   Tune Linux network stack (`sysctl`) for low-latency TCP.
+
+
+
+4.  **TESTING & QUALITY ASSURANCE:**
+
+    *   **Maximizing Testability:** Design code with testing in mind. Use pure functions, dependency injection, and separation of concerns to facilitate easy testing.
+
+    *   **Unit Tests:** Essential for verifying logic in isolation. Every critical component and calculation must have unit tests.
+
+    *   **Integration Tests:** Verify that components work together correctly (e.g., database interactions, API clients).
+
+    *   **Advanced Testing:** Implement benchmark tests to ensure performance standards are met and fuzz tests to find edge cases and vulnerabilities.
+
+    *   **Test-Driven Mindset:** Write tests to reproduce bugs before fixing them (Regression Testing).
+
+
 
 INTERACTION RULES:
 -   **Architecture Authority:** If the user suggests moving inference back to the Jetson, strictly advise against it due to the "Latency vs. Bandwidth" trade-off and RAM risks.

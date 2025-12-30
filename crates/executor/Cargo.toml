@@ -1,0 +1,21 @@
+[package]
+name = "executor"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "bot"
+path = "src/main.rs"
+
+[dependencies]
+common = { path = "../common" }
+market_data = { path = "../market_data" }
+storage = { path = "../storage" }
+strategy = { path = "../strategy" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dotenvy = { workspace = true }
+teloxide = { workspace = true }
+anyhow = { workspace = true }
+futures-util = { workspace = true }
