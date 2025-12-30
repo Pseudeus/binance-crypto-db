@@ -1,8 +1,8 @@
-use chrono::{Datelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Utc};
 use sqlx::sqlite::{self, SqliteConnectOptions, SqlitePool};
 use std::env;
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::Duration as StdDuration;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::{error, info};
@@ -52,19 +52,14 @@ async fn get_weekly_pool(data_folder: &str) -> Result<SqlitePool, sqlx::Error> {
     let current_db_path = format!("{}/sqlitedata/current", data_folder);
     std::fs::create_dir_all(&current_db_path)?;
 
-    let now = Utc::now().iso_week();
-    let db_filename = format!(
-        "{}/crypto_{}_{:02}.db",
-        current_db_path,
-        now.year(),
-        now.week()
-    );
+    let (year, week) = get_date_components(Utc::now());
+    let db_filename = format!("{}/crypto_{}_{:02}.db", current_db_path, year, week);
 
     let options = SqliteConnectOptions::from_str(&format!("sqlite:{}", db_filename))?
         .create_if_missing(true)
         .journal_mode(sqlite::SqliteJournalMode::Wal)
         .synchronous(sqlite::SqliteSynchronous::Normal)
-        .busy_timeout(Duration::from_secs(30))
+        .busy_timeout(StdDuration::from_secs(30))
         .statement_cache_capacity(100)
         .auto_vacuum(sqlite::SqliteAutoVacuum::Incremental)
         .analysis_limit(Some(400))
@@ -120,13 +115,7 @@ async fn run_backup_script() {
     let data_folder_env = env::var("WORKDIR").expect("WORKDIR must be set");
     let data_folder = format!("{}/sqlitedata", data_folder_env);
 
-    let now = Utc::now().iso_week();
-
-    let (prev_year, prev_week) = if now.week() == 1 {
-        (now.year() - 1, 53)
-    } else {
-        (now.year(), now.week() - 1)
-    };
+    let (prev_year, prev_week) = get_previous_iso_week_components(Utc::now());
 
     let utils_path = env::var("UTILS").expect("UTILS must be set");
 
@@ -153,5 +142,45 @@ async fn run_backup_script() {
             error!("Failed to execute command: {}", err);
             return;
         }
+    }
+}
+
+fn get_date_components(now: DateTime<Utc>) -> (i32, u32) {
+    let iso_week = now.iso_week();
+    (iso_week.year(), iso_week.week())
+}
+
+fn get_previous_iso_week_components(now: DateTime<Utc>) -> (i32, u32) {
+    let previous_dt = now - Duration::weeks(1);
+    get_date_components(previous_dt)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn test_dec_29_2025_handling() {
+        let dt = Utc.with_ymd_and_hms(2025, 12, 29, 12, 0, 0).unwrap();
+        let (year, week) = get_date_components(dt);
+
+        // This test documents the ISO week behavior, which is that Dec 29, 2025
+        // is considered part of 2026-W01.
+        assert_eq!(year, 2026, "Expected ISO year for Dec 29, 2025 to be 2026");
+        assert_eq!(week, 1, "Expected ISO week for Dec 29, 2025 to be 1");
+    }
+
+    #[test]
+    fn test_previous_week_bug_documentation() {
+        let dt = Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap();
+
+        let (prev_year, prev_week) = get_previous_iso_week_components(dt);
+
+        // EXPECTED CORRECT BEHAVIOR: The previous ISO week for 2026-W01 (Dec 29, 2025)
+        // should be 2025-W52 (Dec 22-28, 2025).
+        // However, the current buggy implementation returns 2025-W53.
+        assert_eq!(prev_year, 2025, "Expected previous year to be 2025");
+        assert_eq!(prev_week, 52, "Expected previous week to be 52");
     }
 }
