@@ -1,24 +1,31 @@
 use chrono::{DateTime, Datelike, Duration, Utc};
+use common::actors::ControlMessage;
 use sqlx::sqlite::{self, SqliteConnectOptions, SqlitePool};
 use std::env;
 use std::str::FromStr;
 use std::time::Duration as StdDuration;
-use tokio::process::Command;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info};
+
+use crate::actors::backup_actor::BackupOneShotActor;
 
 pub struct RotatingPool {
     data_folder: String,
     inner: RwLock<(u32, SqlitePool)>,
+    supervisor_tx: mpsc::Sender<ControlMessage>,
 }
 
 impl RotatingPool {
-    pub async fn new(data_folder: String) -> Result<Self, sqlx::Error> {
+    pub async fn new(
+        data_folder: String,
+        supervisor_tx: mpsc::Sender<ControlMessage>,
+    ) -> Result<Self, sqlx::Error> {
         let pool = get_weekly_pool(&data_folder).await?;
         let packed = Self::current_packed();
         Ok(Self {
             data_folder,
             inner: RwLock::new((packed, pool)),
+            supervisor_tx,
         })
     }
 
@@ -42,7 +49,16 @@ impl RotatingPool {
         if current_packed != Self::current_packed() {
             let new_pool = get_weekly_pool(&self.data_folder).await?;
             *write = (Self::current_packed(), new_pool);
-            tokio::spawn(async { run_backup_script().await });
+
+            // Spawn the backup actor via the Supervisor
+            let backup_actor = Box::new(BackupOneShotActor::new());
+            let spawn_msg = ControlMessage::Spawn(backup_actor);
+            
+            if let Err(e) = self.supervisor_tx.send(spawn_msg).await {
+                error!("Failed to request Backup Actor spawn: {}", e);
+            } else {
+                info!("Requested Backup Actor spawn via Supervisor");
+            }
         }
         Ok(write.1.clone())
     }
@@ -111,48 +127,14 @@ async fn get_weekly_pool(data_folder: &str) -> Result<SqlitePool, sqlx::Error> {
     Ok(pool)
 }
 
-async fn run_backup_script() {
-    let data_folder_env = env::var("WORKDIR").expect("WORKDIR must be set");
-    let data_folder = format!("{}/sqlitedata", data_folder_env);
-
-    let (prev_year, prev_week) = get_previous_iso_week_components(Utc::now());
-
-    let utils_path = env::var("UTILS").expect("UTILS must be set");
-
-    let result = Command::new(format!("{}/dump_db.sh", utils_path))
-        .arg(data_folder)
-        .arg(format!("crypto_{}_{:02}.db", prev_year, prev_week))
-        .output()
-        .await;
-
-    match result {
-        Ok(output) => {
-            if output.status.success() {
-                info!("Script finished successfully!");
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                info!("{}", stdout);
-            } else {
-                error!("Script failed with error code: {:?}", output.status.code());
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                error!("Error Log: {}", stderr);
-                return;
-            }
-        }
-        Err(err) => {
-            error!("Failed to execute command: {}", err);
-            return;
-        }
-    }
-}
-
-fn get_date_components(date: DateTime<Utc>) -> (i32, u32) {
+pub fn get_date_components(date: DateTime<Utc>) -> (i32, u32) {
     let iso = date.iso_week();
     (iso.year(), iso.week())
 }
 
 /// Calculates the ISO year and week of the week prior to the given date.
 /// Uses time subtraction to correctly handle 52/53 week years.
-fn get_previous_iso_week_components(date: DateTime<Utc>) -> (i32, u32) {
+pub fn get_previous_iso_week_components(date: DateTime<Utc>) -> (i32, u32) {
     let prev = date - Duration::weeks(1);
     get_date_components(prev)
 }
@@ -176,7 +158,7 @@ mod tests {
         // Simulate being in ISO Week 1 of 2026 (e.g., Dec 29, 2025)
         // Dec 29, 2025 is Monday. 12:00:00 UTC.
         let dt = Utc.with_ymd_and_hms(2025, 12, 29, 12, 0, 0).unwrap();
-        
+
         // Verify current is Week 1
         let (cur_year, cur_week) = get_date_components(dt);
         assert_eq!(cur_year, 2026);
@@ -185,7 +167,7 @@ mod tests {
         // Calculate previous week
         let (prev_year, prev_week) = get_previous_iso_week_components(dt);
 
-        // EXPECTED CORRECT BEHAVIOR: 
+        // EXPECTED CORRECT BEHAVIOR:
         // 1 week before Dec 29 is Dec 22.
         // Dec 22, 2025 is in 2025-W52.
         assert_eq!(prev_year, 2025, "Expected previous year to be 2025");

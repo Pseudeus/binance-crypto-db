@@ -6,37 +6,32 @@ use async_trait::async_trait;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
-use common::actors::{Actor, ActorType, ControlMessage};
-use storage::db::RotatingPool;
-use common::models::OrderBookInsert;
-use storage::repositories::OrderBookRepository;
 use crate::services::market_gateway::MarketEvent;
+use common::actors::{Actor, ActorType, ControlMessage};
+use common::models::OrderBookInsert;
+use storage::db::RotatingPool;
+use storage::repositories::OrderBookRepository;
 
 pub struct OrderBookService {
+    id: Uuid,
     rotating_pool: Arc<RotatingPool>,
     order_tx: broadcast::Receiver<Arc<MarketEvent>>,
 }
 
 #[async_trait]
 impl Actor for OrderBookService {
+    fn id(&self) -> Uuid {
+        self.id
+    }
+
     fn name(&self) -> ActorType {
         ActorType::OrderBookActor
     }
 
     async fn run(&mut self, supervisor_tx: mpsc::Sender<ControlMessage>) -> anyhow::Result<()> {
-        let heartbeat_handle = {
-            let tx = supervisor_tx.clone();
-            let name = self.name();
-            tokio::spawn(async move {
-                loop {
-                    if tx.send(ControlMessage::Heartbeat(name)).await.is_err() {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                }
-            })
-        };
+        let heartbeat_handle = self.spawn_heartbeat(supervisor_tx.clone());
 
         info!("Starting OrderBook Ingestion Service");
 
@@ -54,7 +49,7 @@ impl Actor for OrderBookService {
                             let err_msg = format!("Failed to send to DB writer: {}", e);
                             heartbeat_handle.abort();
                             supervisor_tx
-                                .send(ControlMessage::Error(self.name(), err_msg.clone()))
+                                .send(ControlMessage::Error(self.id, err_msg.clone()))
                                 .await?;
                             bail!(err_msg);
                         }
@@ -67,7 +62,7 @@ impl Actor for OrderBookService {
                     let err_msg = format!("OrderBook channel closed unexpectedly.");
                     heartbeat_handle.abort();
                     supervisor_tx
-                        .send(ControlMessage::Error(self.name(), err_msg.clone()))
+                        .send(ControlMessage::Error(self.id, err_msg.clone()))
                         .await?;
                     bail!(err_msg);
                 }
@@ -82,6 +77,7 @@ impl OrderBookService {
         order_tx: broadcast::Receiver<Arc<MarketEvent>>,
     ) -> Self {
         Self {
+            id: Uuid::new_v4(),
             rotating_pool,
             order_tx,
         }

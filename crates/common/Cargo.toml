@@ -13,3 +13,4 @@ tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
+uuid = { workspace = true }

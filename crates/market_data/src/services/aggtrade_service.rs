@@ -6,37 +6,32 @@ use async_trait::async_trait;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
-use common::actors::{Actor, ActorType, ControlMessage};
-use storage::db::RotatingPool;
-use common::models::AggTradeInsert;
-use storage::repositories::AggTradeRepository;
 use crate::services::market_gateway::MarketEvent;
+use common::actors::{Actor, ActorType, ControlMessage};
+use common::models::AggTradeInsert;
+use storage::db::RotatingPool;
+use storage::repositories::AggTradeRepository;
 
 pub struct AggTradeService {
+    id: Uuid,
     rotating_pool: Arc<RotatingPool>,
     trade_rx: broadcast::Receiver<Arc<MarketEvent>>,
 }
 
 #[async_trait]
 impl Actor for AggTradeService {
+    fn id(&self) -> Uuid {
+        self.id
+    }
+
     fn name(&self) -> ActorType {
         ActorType::AggTradeActor
     }
 
     async fn run(&mut self, supervisor_tx: mpsc::Sender<ControlMessage>) -> anyhow::Result<()> {
-        let heartbeat_handle = {
-            let tx = supervisor_tx.clone();
-            let name = self.name();
-            tokio::spawn(async move {
-                loop {
-                    if tx.send(ControlMessage::Heartbeat(name)).await.is_err() {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                }
-            })
-        };
+        let heartbeat_handle = self.spawn_heartbeat(supervisor_tx.clone());
 
         info!("Starting AggTrade Ingestion Service");
 
@@ -54,8 +49,12 @@ impl Actor for AggTradeService {
                             heartbeat_handle.abort();
                             supervisor_tx
                                 .send(ControlMessage::Error(
-                                    self.name(),
-                                    format!("Failed to send to DB writer: {}", e),
+                                    self.id,
+                                    format!(
+                                        "{:?}: Failed to send to DB writer: {}",
+                                        self.name(),
+                                        e
+                                    ),
                                 ))
                                 .await?;
                             bail!("Failed to send to DB writer: {}", e);
@@ -69,8 +68,8 @@ impl Actor for AggTradeService {
                     heartbeat_handle.abort();
                     supervisor_tx
                         .send(ControlMessage::Error(
-                            self.name(),
-                            format!("AggTrade channel closed unexpectedly."),
+                            self.id,
+                            format!("{:?}: AggTrade channel closed unexpectedly.", self.name()),
                         ))
                         .await?;
                     bail!("AggTrade channel closed unexpectedly.");
@@ -86,6 +85,7 @@ impl AggTradeService {
         trade_rx: broadcast::Receiver<Arc<MarketEvent>>,
     ) -> Self {
         Self {
+            id: Uuid::new_v4(),
             rotating_pool,
             trade_rx,
         }
