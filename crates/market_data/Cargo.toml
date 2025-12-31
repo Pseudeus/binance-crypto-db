@@ -20,3 +20,4 @@ async-trait = { workspace = true }
 url = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+uuid = { workspace = true }

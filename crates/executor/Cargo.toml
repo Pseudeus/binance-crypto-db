@@ -19,3 +19,4 @@ dotenvy = { workspace = true }
 teloxide = { workspace = true }
 anyhow = { workspace = true }
 futures-util = { workspace = true }
+uuid = { workspace = true }

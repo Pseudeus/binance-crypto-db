@@ -25,45 +25,89 @@ We use Rust not just for speed, but for **correctness** and **memory safety**.
 ### 3. Edge-First Architecture
 We explicitly reject the "Jetson Nano" or hybrid approaches that introduce RAM bottlenecks or network latency. The RISC-V architecture offers a modern, efficient instruction set perfect for this specialized workload.
 
-## 🏗 Architecture
+## 🏗 System Architecture
 
-The system follows a strict **Ingest -> Process -> Inference -> Execute** pipeline:
+The project is structured as a **Rust Workspace** with specialized crates, orchestrated by a central Supervisor.
 
 ```mermaid
-graph LR
-    A[Binance WS] -->|Tokio Tungstenite| B(Market Gateway)
-    B -->|Broadcast Arc| C[Strategy Service]
-    B -->|Broadcast Arc| D[DB Writer]
-    C -->|Feature Eng| E[Inference Engine]
-    E -->|Tract ONNX| F{Decision?}
-    F -->|Buy/Sell| G[Execution Service]
-    G -->|Signed REST| H[Binance API]
-    D -->|SQLx| I[(SQLite)]
+graph TD
+    subgraph "Executor (The Brain)"
+        Sup[Supervisor]
+    end
+
+    subgraph "Market Data (The Senses)"
+        Gateway[Market Gateway]
+        Agg[AggTrade Actor]
+        OB[OrderBook Actor]
+    end
+
+    subgraph "Strategy (The Logic)"
+        Strat[Strategy Service]
+        Inf[Inference Engine]
+    end
+
+    subgraph "Storage (The Memory)"
+        Pool[Rotating DB Pool]
+        Backup[Backup Actor (Dynamic)]
+        SQLite[(SQLite DB)]
+    end
+
+    Sup -->|Monitors/Restarts| Gateway
+    Sup -->|Monitors/Restarts| Agg
+    Sup -->|Monitors/Restarts| Strat
+    Sup -->|Spawns (OneShot)| Backup
+
+    Gateway -->|Broadcast Arc| Agg
+    Gateway -->|Broadcast Arc| OB
+    Gateway -->|Broadcast Arc| Strat
+
+    Agg -->|Insert| Pool
+    OB -->|Insert| Pool
+    
+    Strat -->|Feat Eng| Inf
+    Pool -.->|Requests Spawn| Sup
 ```
 
-### Key Components
-*   **Market Gateway:** Manages WebSocket connections (`aggTrade`, `depth20`, `bookTicker`). Handles reconnections and heartbeats automatically.
-*   **Strategy Service:** Real-time feature calculator. Computes RSI, Order Book Imbalance (OBI), and Volume Imbalance (TFI) on the fly.
-*   **Inference Engine:** Embeds the `tract-onnx` runtime to execute ML models directly within the Rust process.
-*   **Execution Service:** Handles HMAC-SHA256 signing and communicates with the Binance Spot API. Includes safety checks for balance and position limits.
-*   **Supervisor:** A top-level actor that monitors the health of all services, providing fault tolerance.
+### 🧱 Modular Crate Structure
+
+| Crate | Responsibility |
+|-------|----------------|
+| **`executor`** | **The Kernel.** Contains the `Supervisor`, system bootstrap, and service wiring. Handles OS signals and global state. |
+| **`market_data`** | **Ingestion.** Manages WebSocket connections to Binance. Normalizes `aggTrade`, `depth20`, and `kline` streams into strictly typed events. |
+| **`strategy`** | **Intelligence.** Calculates statistical indicators (RSI, Imbalance) and runs the ONNX Inference Engine. |
+| **`storage`** | **Persistence.** Manages the SQLite database, weekly rotation logic, and asynchronous backup operations. |
+| **`common`** | **Shared Types.** Defines the lingua franca of the system: Domain Models, Actor Traits, and Logging infrastructure. |
+
+## 🧠 The Supervisor & Actor Model
+
+The system employs a robust **Supervisor Pattern** to ensure high availability and fault tolerance.
+
+*   **Persistent Actors:** Core services (Gateway, Ingestion, Strategy) are registered with **Factories**. If they crash, the Supervisor automatically restarts them using the factory closure, ensuring the bot "self-heals."
+*   **Dynamic Actors (OneShot):** Temporary tasks—such as Database Backups—can be requested at runtime. The Supervisor spawns these "Dynamic Actors" (identified by UUID), monitors their lifecycle, and cleans them up upon completion or failure without attempting restarts.
+
+## 💾 Data Lifecycle & Storage
+
+To handle high-frequency data without bloating the disk or blocking the hot path:
+
+1.  **Weekly Rotation:** The `RotatingPool` automatically switches to a new SQLite database file (e.g., `crypto_2025_52.db`) at the start of a new ISO week.
+2.  **Async Backups:** Upon rotation, the storage layer sends a `Spawn(BackupActor)` message to the Supervisor. This launches a dedicated actor that compresses the old database (ZSTD) and moves it to cold storage, completely independent of the trading loop.
+3.  **WAL Mode:** SQLite is configured in Write-Ahead Log (WAL) mode with `synchronous = NORMAL` for maximum write throughput.
 
 ## ⚡ Performance & Resilience
 
-### "Production Ready" by Design
 *   **LTO Optimization:** Compiled with `lto = "fat"` and `codegen-units = 1` for maximum machine code efficiency on RISC-V.
 *   **Zero-Copy Networking:** Leverages `tokio::sync::broadcast` to share immutable market data across threads without cloning.
-*   **Database:** Uses `SQLite` in WAL mode for high-speed, local persistence of market history, essential for retraining models.
+*   **UUID Actor Tracking:** Precise lifecycle management for unlimited dynamic tasks.
 *   **Systemd Integration:** Runs as a native Linux service with auto-restart capabilities.
 
 ## 🛠 Tech Stack
 
 *   **Language:** Rust (2024 Edition)
-*   **Runtime:** `tokio` (Async I/O), `futures`
-*   **Data Science:** `polars` (DataFrames), `ndarray` (Tensors), `ta` (Technical Analysis)
-*   **ML Runtime:** `tract-onnx` (Neural Network Inference)
+*   **Runtime:** `tokio`, `async-trait`, `futures`
+*   **Architecture:** Actor Model (Custom Supervisor implementation)
+*   **ML Runtime:** `tract-onnx` (Run optimized ONNX models on CPU)
 *   **Database:** `sqlx` (Async SQLite)
-*   **Networking:** `reqwest`, `tokio-tungstenite`
+*   **Serialization:** `serde`, `serde_json`
 *   **Training (Offline):** Python, PyTorch, AMD ROCm
 
 ## 🚧 Status & Roadmap
@@ -72,7 +116,8 @@ graph LR
 *   ✅ Real-time WebSocket ingestion (Zero-copy)
 *   ✅ On-device ONNX inference
 *   ✅ Live order execution (Spot Market)
-*   ✅ Telegram notifications (`teloxide`)
+*   ✅ Self-healing Supervisor System
+*   ✅ Automatic Data Rotation & Backup
 
 **Future Work:**
 *   **Advanced Models:** Transition from FFN to LSTM/GRU for time-series memory.

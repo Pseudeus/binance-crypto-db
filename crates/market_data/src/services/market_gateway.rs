@@ -13,12 +13,11 @@ use tracing::{debug, error, info};
 
 use serde::Deserialize;
 use serde_json::Value;
+use uuid::Uuid;
 
-use crate::{
-    remote::{
-        get_ws_base_url, AggTradeCombinedEvent, AggTradeEvent, DepthPayload, KlineDataCombinedEvent,
-        OrderBookCombinedEvent,
-    },
+use crate::remote::{
+    AggTradeCombinedEvent, AggTradeEvent, DepthPayload, KlineDataCombinedEvent,
+    OrderBookCombinedEvent, get_ws_base_url,
 };
 
 use common::{
@@ -39,29 +38,23 @@ struct RawStreamEvent {
 }
 
 pub struct MarketGateway {
+    id: Uuid,
     symbols: Vec<String>,
     market_tx: broadcast::Sender<Arc<MarketEvent>>,
 }
 
 #[async_trait]
 impl Actor for MarketGateway {
+    fn id(&self) -> Uuid {
+        self.id
+    }
+
     fn name(&self) -> ActorType {
         ActorType::GatewayActor
     }
 
     async fn run(&mut self, supervisor_tx: mpsc::Sender<ControlMessage>) -> anyhow::Result<()> {
-        let heartbeat_handle = {
-            let tx = supervisor_tx.clone();
-            let name = self.name();
-            tokio::spawn(async move {
-                loop {
-                    if tx.send(ControlMessage::Heartbeat(name)).await.is_err() {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                }
-            })
-        };
+        let heartbeat_handle = self.spawn_heartbeat(supervisor_tx.clone());
 
         let streams: Vec<String> = self
             .symbols
@@ -93,7 +86,7 @@ impl Actor for MarketGateway {
                                     Err(e) => {
                                         supervisor_tx
                                             .send(ControlMessage::Error(
-                                                self.name(),
+                                                self.id,
                                                 format!("Unknown socket response: {}", e),
                                             ))
                                             .await?;
@@ -119,7 +112,7 @@ impl Actor for MarketGateway {
                             _ => {
                                 supervisor_tx
                                     .send(ControlMessage::Error(
-                                        self.name(),
+                                        self.id,
                                         "Unexpected message received, continuing...".to_string(),
                                     ))
                                     .await?;
@@ -133,7 +126,7 @@ impl Actor for MarketGateway {
 
                     supervisor_tx
                         .send(ControlMessage::Error(
-                            self.name(),
+                            self.id,
                             format!("Connection failed: {}. Retrying in 2s...", e),
                         ))
                         .await?;
@@ -147,6 +140,7 @@ impl Actor for MarketGateway {
 impl MarketGateway {
     pub fn new(symbols: &[&str], market_tx: broadcast::Sender<Arc<MarketEvent>>) -> Self {
         Self {
+            id: Uuid::new_v4(),
             symbols: symbols.iter().map(|s| s.to_string()).collect(),
             market_tx,
         }

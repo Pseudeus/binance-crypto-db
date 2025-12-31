@@ -43,12 +43,13 @@ async fn main() -> anyhow::Result<()> {
     dotenv().ok();
     debug!("System starting up...");
 
+    let mut supervisor = Supervisor::new();
+    let supervisor_tx = supervisor.sender();
+
     let data_folder = env::var("WORKDIR")?;
-    let rotating_pool = Arc::new(RotatingPool::new(data_folder).await?);
+    let rotating_pool = Arc::new(RotatingPool::new(data_folder, supervisor_tx).await?);
 
     let (market_tx, _) = broadcast::channel::<Arc<MarketEvent>>(10_000);
-
-    let mut supervisor = Supervisor::new();
 
     let tx_for_gateway = market_tx.clone();
     supervisor.register_actor(

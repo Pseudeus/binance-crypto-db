@@ -10,3 +10,6 @@ sqlx = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 libsqlite3-sys = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }

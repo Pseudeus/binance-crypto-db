@@ -33,6 +33,7 @@ url = "2.5.0"
 dotenvy = "0.15.7"
 teloxide = { version = "0.13", features = ["macros"] }
 libsqlite3-sys = { version = "^0.30.1", features = ["bundled"] }
+uuid = { version = "1.19.0", features = ["v4"] }
 
 [profile.release]
 lto = "fat"
