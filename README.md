@@ -48,7 +48,8 @@ graph TD
 
     subgraph "Storage (The Memory)"
         Pool[Rotating DB Pool]
-                Backup[Backup Actor (Dynamic)]QLite[(SQLite DB)]
+        Backup[Backup Actor (Dynamic)]
+        SQLite[(SQLite DB)]
     end
 
     Sup -->|Monitors/Restarts| Gateway
