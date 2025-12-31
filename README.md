@@ -55,7 +55,7 @@ graph TD
     Sup -->|Monitors/Restarts| Gateway
     Sup -->|Monitors/Restarts| Agg
     Sup -->|Monitors/Restarts| Strat
-    Sup -->|Spawns (OneShot)| Backup
+    Sup -->|"Spawns (OneShot)"| Backup
 
     Gateway -->|Broadcast Arc| Agg
     Gateway -->|Broadcast Arc| OB
