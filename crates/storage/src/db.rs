@@ -4,7 +4,7 @@ use sqlx::sqlite::{self, SqliteConnectOptions, SqlitePool};
 use std::env;
 use std::str::FromStr;
 use std::time::Duration as StdDuration;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{error, info};
 
 use crate::actors::backup_actor::BackupOneShotActor;
@@ -53,7 +53,7 @@ impl RotatingPool {
             // Spawn the backup actor via the Supervisor
             let backup_actor = Box::new(BackupOneShotActor::new());
             let spawn_msg = ControlMessage::Spawn(backup_actor);
-            
+
             if let Err(e) = self.supervisor_tx.send(spawn_msg).await {
                 error!("Failed to request Backup Actor spawn: {}", e);
             } else {
@@ -83,47 +83,9 @@ async fn get_weekly_pool(data_folder: &str) -> Result<SqlitePool, sqlx::Error> {
 
     let pool = SqlitePool::connect_with(options).await?;
 
-    sqlx::query(
-        r#"
-            CREATE TABLE IF NOT EXISTS order_books(
-                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                time REAL NOT NULL,
-                symbol TEXT NOT NULL,
-                bids BLOB NOT NULL,
-                asks BLOB NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_time ON order_books(time);
-            CREATE INDEX IF NOT EXISTS idx_symbol_time ON order_books(symbol, time);
+    let schema = include_str!("../../../sql/schema.sql");
 
-            CREATE TABLE IF NOT EXISTS agg_trades(
-                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                time REAL NOT NULL,
-                symbol TEXT NOT NULL,
-                price REAL NOT NULL,
-                quantity REAL NOT NULL,
-                is_buyer_maker BOOLEAN NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_agg_symbol_time ON agg_trades(symbol, time);
-
-            CREATE TABLE IF NOT EXISTS klines(
-                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                symbol TEXT NOT NULL,
-                interval TEXT NOT NULL,
-                start_time INTEGER NOT NULL,
-                close_time INTEGER NOT NULL,
-                open_price REAL NOT NULL,
-                close_price REAL NOT NULL,
-                high_price REAL NOT NULL,
-                low_price REAL NOT NULL,
-                volume REAL NOT NULL,
-                no_of_trades INTEGER NOT NULL,
-                taker_buy_vol REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_klines_symbol_interval_starttime ON klines(symbol, interval, start_time);
-        "#,
-    )
-    .execute(&pool)
-    .await?;
+    sqlx::query(schema).execute(&pool).await?;
     Ok(pool)
 }
 
