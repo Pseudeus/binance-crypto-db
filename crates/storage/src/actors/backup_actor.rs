@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use crate::db::get_previous_iso_week_components;
+use crate::{actors::BackupScriptError, db::get_previous_iso_week_components};
 
 pub struct BackupOneShotActor {
     id: Uuid,
@@ -42,14 +42,19 @@ impl Actor for BackupOneShotActor {
         match result {
             Ok(output) => {
                 if output.status.success() {
-                    info!("Script finished successfully!");
+                    info!("Backup finished successfully!");
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     info!("{}", stdout);
                 } else {
-                    error!("Script failed with error code: {:?}", output.status.code());
+                    let code = output.status.code().unwrap_or(-1);
+
+                    let error_enum = BackupScriptError::from(code);
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    error!("Error Log: {}", stderr);
-                    bail!("The script encountered some errors: {}", stderr);
+
+                    error!("Backup failed: {}", error_enum);
+                    error!("Script Stderr: {}", stderr);
+                    hearbeat_handle.abort();
+                    bail!(error_enum);
                 }
             }
             Err(err) => {

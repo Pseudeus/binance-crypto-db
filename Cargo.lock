@@ -4496,6 +4496,7 @@ dependencies = [
  "common",
  "libsqlite3-sys",
  "sqlx",
+ "thiserror 2.0.17",
  "tokio",
  "tracing",
  "uuid",
