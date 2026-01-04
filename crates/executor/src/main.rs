@@ -1,15 +1,17 @@
 use dotenvy::dotenv;
+use market_data::services::forceorder_service::ForceOrderService;
+use market_data::services::markprice_service::MarkPriceService;
 use std::{env, sync::Arc};
+use storage::data_manager::DataManager;
 use tokio::sync::broadcast;
 use tracing::debug;
 
-use common::logger;
 use common::actors::ActorType;
-use storage::db::RotatingPool;
-use market_data::services::market_gateway::{MarketEvent, MarketGateway};
+use common::logger;
 use market_data::services::aggtrade_service::AggTradeService;
-use market_data::services::orderbook_service::OrderBookService;
 use market_data::services::klines_service::KlinesService;
+use market_data::services::market_gateway::{MarketEvent, MarketGateway};
+use market_data::services::orderbook_service::OrderBookService;
 
 use crate::actors::supervisor::Supervisor;
 
@@ -47,22 +49,17 @@ async fn main() -> anyhow::Result<()> {
     let supervisor_tx = supervisor.sender();
 
     let data_folder = env::var("WORKDIR")?;
-    let rotating_pool = Arc::new(RotatingPool::new(data_folder, supervisor_tx).await?);
+    let data_manager = DataManager::new(data_folder, supervisor_tx).await?;
 
     let (market_tx, _) = broadcast::channel::<Arc<MarketEvent>>(10_000);
 
     let tx_for_gateway = market_tx.clone();
     supervisor.register_actor(
         ActorType::GatewayActor,
-        Box::new(move || {
-            Box::new(MarketGateway::new(
-                SYMBOLS,
-                tx_for_gateway.clone(),
-            ))
-        }),
+        Box::new(move || Box::new(MarketGateway::new(SYMBOLS, tx_for_gateway.clone()))),
     );
 
-    let pool_for_agg = rotating_pool.clone();
+    let pool_for_agg = data_manager.clone();
     let tx_for_agg = market_tx.subscribe();
     supervisor.register_actor(
         ActorType::AggTradeActor,
@@ -74,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
         }),
     );
 
-    let pool_for_order = rotating_pool.clone();
+    let pool_for_order = data_manager.clone();
     let tx_for_order = market_tx.subscribe();
     supervisor.register_actor(
         ActorType::OrderBookActor,
@@ -86,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
         }),
     );
 
-    let pool_for_klines = rotating_pool.clone();
+    let pool_for_klines = data_manager.clone();
     let tx_for_klines = market_tx.subscribe();
     supervisor.register_actor(
         ActorType::KlinesActor,
@@ -94,6 +91,30 @@ async fn main() -> anyhow::Result<()> {
             Box::new(KlinesService::new(
                 pool_for_klines.clone(),
                 tx_for_klines.resubscribe(),
+            ))
+        }),
+    );
+
+    let pool_for_mark_prices = data_manager.clone();
+    let tx_for_mark_prices = market_tx.subscribe();
+    supervisor.register_actor(
+        ActorType::MarkPriceActor,
+        Box::new(move || {
+            Box::new(MarkPriceService::new(
+                pool_for_mark_prices.clone(),
+                tx_for_mark_prices.resubscribe(),
+            ))
+        }),
+    );
+
+    let pool_for_force_order = data_manager.clone();
+    let tx_for_force_order = market_tx.subscribe();
+    supervisor.register_actor(
+        ActorType::ForceOrderActor,
+        Box::new(move || {
+            Box::new(ForceOrderService::new(
+                pool_for_force_order.clone(),
+                tx_for_force_order.resubscribe(),
             ))
         }),
     );

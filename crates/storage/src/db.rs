@@ -1,7 +1,6 @@
 use chrono::{DateTime, Datelike, Duration, Utc};
 use common::actors::ControlMessage;
 use sqlx::sqlite::{self, SqliteConnectOptions, SqlitePool};
-use std::env;
 use std::str::FromStr;
 use std::time::Duration as StdDuration;
 use tokio::sync::{RwLock, mpsc};
@@ -34,12 +33,24 @@ impl RotatingPool {
         (year as u32) << 6 | (week & 0x3f)
     }
 
-    pub async fn get(&self) -> Result<SqlitePool, sqlx::Error> {
+    /// Retrieves the current active SQLite connection pool, rotating the database file if necessary.
+    ///
+    /// This method implements a "Weekly Rotation" strategy:
+    /// 1. Checks if the current ISO week has changed since the last pool was created.
+    /// 2. If valid, returns the existing pool (Read Lock).
+    /// 3. If outdated, acquires a Write Lock to create a new database file (e.g., `crypto_2026_01.db`).
+    /// 4. Triggers a `BackupOneShotActor` via the Supervisor to archive the previous week's database.
+    ///
+    /// # Returns
+    /// A tuple `(SqlitePool, bool)`:
+    /// - `SqlitePool`: The active connection pool.
+    /// - `bool`: `true` if a rotation occurred (a new pool was created), `false` otherwise.
+    pub async fn get_pool(&self) -> Result<(SqlitePool, bool), sqlx::Error> {
         let read = self.inner.read().await;
         let (current_packed, ref pool) = *read;
 
         if current_packed == Self::current_packed() {
-            return Ok(pool.clone());
+            return Ok((pool.clone(), false));
         }
         drop(read);
 
@@ -54,19 +65,21 @@ impl RotatingPool {
             let backup_actor = Box::new(BackupOneShotActor::new());
             let spawn_msg = ControlMessage::Spawn(backup_actor);
 
-            if let Err(e) = self.supervisor_tx.send(spawn_msg).await {
+            if let Err(e) = self.supervisor_tx.try_send(spawn_msg) {
                 error!("Failed to request Backup Actor spawn: {}", e);
             } else {
                 info!("Requested Backup Actor spawn via Supervisor");
             }
         }
-        Ok(write.1.clone())
+        Ok((write.1.clone(), true))
     }
 }
 
 async fn get_weekly_pool(data_folder: &str) -> Result<SqlitePool, sqlx::Error> {
     let current_db_path = format!("{}/sqlitedata/current", data_folder);
-    std::fs::create_dir_all(&current_db_path)?;
+    tokio::fs::create_dir_all(&current_db_path)
+        .await
+        .map_err(|e| sqlx::Error::Io(e))?;
 
     let (year, week) = get_date_components(Utc::now());
     let db_filename = format!("{}/crypto_{}_{:02}.db", current_db_path, year, week);
@@ -82,9 +95,8 @@ async fn get_weekly_pool(data_folder: &str) -> Result<SqlitePool, sqlx::Error> {
         .command_buffer_size(5000);
 
     let pool = SqlitePool::connect_with(options).await?;
-
-    let schema = include_str!("../../../sql/schema.sql");
-
+    // sqlx::migrate!().run(&pool).await?;
+    let schema = include_str!("../migrations/schema.sql");
     sqlx::query(schema).execute(&pool).await?;
     Ok(pool)
 }

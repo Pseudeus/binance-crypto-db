@@ -1,7 +1,8 @@
 use serde::Deserialize;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use common::models::OrderBookInsert;
+
+use crate::traits::RemoteResponse;
 
 #[derive(Deserialize, Debug)]
 pub struct OrderBookCombinedEvent {
@@ -15,8 +16,8 @@ pub struct DepthPayload {
     pub asks: Vec<[String; 2]>,
 }
 
-impl OrderBookCombinedEvent {
-    pub fn to_insertable(&self) -> Result<OrderBookInsert, serde_json::Error> {
+impl RemoteResponse<OrderBookInsert> for OrderBookCombinedEvent {
+    fn to_insertable(&self) -> Result<OrderBookInsert, serde_json::Error> {
         let symbol_upper = &self
             .stream
             .split('@')
@@ -24,20 +25,16 @@ impl OrderBookCombinedEvent {
             .unwrap_or("UNK")
             .to_uppercase();
 
-        let now = SystemTime::now();
-        let timestamp_float = now
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_secs_f64();
-
         Ok(OrderBookInsert {
-            time: timestamp_float,
+            time: self.get_time_f64(),
             symbol: symbol_upper.to_string(),
             bids: Self::pack_level(&self.data.bids),
             asks: Self::pack_level(&self.data.asks),
         })
     }
+}
 
+impl OrderBookCombinedEvent {
     fn pack_level(items: &Vec<[String; 2]>) -> Vec<u8> {
         let capacity = items.len() * 8;
         let mut writer = Vec::with_capacity(capacity);

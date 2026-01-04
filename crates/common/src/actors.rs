@@ -10,6 +10,8 @@ pub enum ActorType {
     KlinesActor,
     OrderBookActor,
     GatewayActor,
+    MarkPriceActor,
+    ForceOrderActor,
     Dynamic,
 }
 

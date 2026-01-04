@@ -1,12 +1,13 @@
+use std::error::Error;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::bail;
 use async_trait::async_trait;
+use common::models::{ForceOrderInsert, MarkPriceInsert};
 use futures_util::{SinkExt, StreamExt};
 use tokio::{
     sync::{broadcast, mpsc},
-    time,
+    time::{self, Duration},
 };
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, info};
@@ -15,9 +16,14 @@ use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::remote::{
-    AggTradeCombinedEvent, AggTradeEvent, DepthPayload, KlineDataCombinedEvent,
-    OrderBookCombinedEvent, get_ws_base_url,
+use crate::remote::markprice_response::MarkPriceEvent;
+use crate::remote::{forceorder_response::ForceOrderCombinedEvent, get_futures_ws_base_url};
+use crate::{
+    remote::{
+        AggTradeCombinedEvent, AggTradeEvent, DepthPayload, KlineDataCombinedEvent,
+        OrderBookCombinedEvent, get_ws_base_url,
+    },
+    traits::RemoteResponse,
 };
 
 use common::{
@@ -29,6 +35,8 @@ pub enum MarketEvent {
     AggTrade(AggTradeInsert),
     OrderBook(OrderBookInsert),
     Kline((KlineInsert, bool)),
+    MarkPrice(MarkPriceInsert),
+    ForceOrder(ForceOrderInsert),
 }
 
 #[derive(Deserialize)]
@@ -67,12 +75,44 @@ impl Actor for MarketGateway {
             })
             .collect();
 
+        let fstreams: Vec<String> = self
+            .symbols
+            .iter()
+            .map(|s| format!("{sl}@forceOrder/{sl}@markPrice@1s", sl = s.to_lowercase()))
+            .collect();
+
         let url = format!("{}{}", get_ws_base_url(), streams.join("/"));
+        let furl = format!("{}{}", get_futures_ws_base_url(), fstreams.join("/"));
 
+        tokio::select! {
+            _ = self.websocket_connection(&url, supervisor_tx.clone()) => {
+                heartbeat_handle.abort()
+            }
+            _ = self.websocket_connection(&furl, supervisor_tx.clone()) => {
+                heartbeat_handle.abort()
+            }
+        }
+        Ok(())
+    }
+}
+
+impl MarketGateway {
+    pub fn new(symbols: &[&str], market_tx: broadcast::Sender<Arc<MarketEvent>>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            symbols: symbols.iter().map(|s| s.to_string()).collect(),
+            market_tx,
+        }
+    }
+
+    async fn websocket_connection(
+        &self,
+        url: &str,
+        supervisor_tx: mpsc::Sender<ControlMessage>,
+    ) -> Result<(), Box<dyn Error>> {
         info!("Connecting to: {}", url);
-
         loop {
-            match tokio_tungstenite::connect_async(&url).await {
+            match tokio_tungstenite::connect_async(url).await {
                 Ok((ws_stream, _)) => {
                     let (mut write, mut read) = ws_stream.split();
 
@@ -101,12 +141,10 @@ impl Actor for MarketGateway {
                             }
                             Ok(Message::Close(_)) => {
                                 debug!("Close message received");
-                                heartbeat_handle.abort();
                                 break;
                             }
                             Err(e) => {
                                 error!("WebSocket error: {}", e);
-                                heartbeat_handle.abort();
                                 break;
                             }
                             _ => {
@@ -133,16 +171,6 @@ impl Actor for MarketGateway {
                     time::sleep(Duration::from_secs(2)).await;
                 }
             }
-        }
-    }
-}
-
-impl MarketGateway {
-    pub fn new(symbols: &[&str], market_tx: broadcast::Sender<Arc<MarketEvent>>) -> Self {
-        Self {
-            id: Uuid::new_v4(),
-            symbols: symbols.iter().map(|s| s.to_string()).collect(),
-            market_tx,
         }
     }
 
@@ -172,6 +200,14 @@ impl MarketGateway {
             let specific_data = serde_json::from_value::<KlineDataCombinedEvent>(raw_event.data)?;
 
             return Ok(MarketEvent::Kline(specific_data.to_insertable()?));
+        } else if raw_event.stream.ends_with("@markPrice@1s") {
+            let specific_data = serde_json::from_value::<MarkPriceEvent>(raw_event.data)?;
+
+            return Ok(MarketEvent::MarkPrice(specific_data.to_insertable()?));
+        } else if raw_event.stream.ends_with("@forceOrder") {
+            let specific_data = serde_json::from_value::<ForceOrderCombinedEvent>(raw_event.data)?;
+
+            return Ok(MarketEvent::ForceOrder(specific_data.to_insertable()?));
         } else {
             bail!("Unknown received data.");
         }
