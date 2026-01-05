@@ -3,20 +3,19 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use async_trait::async_trait;
+use storage::data_manager::DataManager;
 use tokio::sync::{broadcast, mpsc};
-use tokio::time;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::services::market_gateway::MarketEvent;
 use common::actors::{Actor, ActorType, ControlMessage};
 use common::models::KlineInsert;
-use storage::db::RotatingPool;
 use storage::repositories::KlinesRepository;
 
 pub struct KlinesService {
     id: Uuid,
-    rotating_pool: Arc<RotatingPool>,
+    rotating_pool: Arc<DataManager>,
     kline_rx: broadcast::Receiver<Arc<MarketEvent>>,
 }
 
@@ -73,7 +72,7 @@ impl Actor for KlinesService {
 
 impl KlinesService {
     pub fn new(
-        rotating_pool: Arc<RotatingPool>,
+        rotating_pool: Arc<DataManager>,
         kline_rx: broadcast::Receiver<Arc<MarketEvent>>,
     ) -> Self {
         Self {
@@ -84,7 +83,7 @@ impl KlinesService {
     }
 
     async fn db_writer(
-        r_pool: Arc<RotatingPool>,
+        r_pool: Arc<DataManager>,
         mut kline_rx: mpsc::Receiver<(KlineInsert, bool)>,
     ) {
         let mut buffer = Vec::with_capacity(300);
@@ -118,21 +117,8 @@ impl KlinesService {
         }
     }
 
-    async fn flush_batch(r_pool: &RotatingPool, batch: &[KlineInsert]) {
-        let pool = loop {
-            match r_pool.get().await {
-                Ok(p) => {
-                    break p;
-                }
-                Err(e) => {
-                    error!("Failed to get DB pool: {}. Retrying...", e);
-                    time::sleep(Duration::from_secs(5)).await;
-                    continue;
-                }
-            };
-        };
-
-        if let Err(e) = KlinesRepository::insert_batch(&pool, batch).await {
+    async fn flush_batch(r_pool: &DataManager, batch: &[KlineInsert]) {
+        if let Err(e) = KlinesRepository::insert_batch(r_pool, batch).await {
             error!("DB write failed: {}", e);
         } else {
             debug!("Wrote {} klines to DB", batch.len());

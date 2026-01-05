@@ -1,32 +1,33 @@
-use common::models::OrderBookInsert;
+use common::models::OpenInterestInsert;
 
 use crate::data_manager::DataManager;
 
-pub struct OrderBookRepository;
+pub struct OpenInterestRepository;
 
-impl OrderBookRepository {
+impl OpenInterestRepository {
     pub async fn insert_batch(
         data_manager: &DataManager,
-        books: &[OrderBookInsert],
+        interests: &[OpenInterestInsert],
     ) -> Result<(), sqlx::Error> {
-        if books.is_empty() {
+        if interests.is_empty() {
             return Ok(());
         }
+
         let (pool, _) = data_manager.pool_rotator.get_pool().await?;
         let mut tx = pool.begin().await?;
 
-        for b in books {
-            let symbol_id = data_manager.get_symbol_id(&b.symbol).await?;
+        for interest in interests {
+            let symbol_id = data_manager.get_symbol_id(&interest.symbol).await?;
             sqlx::query(
                 r#"
-                    INSERT INTO order_books(time, symbol_id, bids, asks)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO open_interest (
+                        time, symbol_id, oi_value
+                    ) VALUES (?, ?, ?)
                 "#,
             )
-            .bind(b.time)
+            .bind(interest.time)
             .bind(symbol_id)
-            .bind(&b.bids)
-            .bind(&b.asks)
+            .bind(interest.oi_value)
             .execute(&mut *tx)
             .await?;
         }

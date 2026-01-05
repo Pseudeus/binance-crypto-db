@@ -1,51 +1,51 @@
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::bail;
 use async_trait::async_trait;
-use storage::data_manager::DataManager;
-use tokio::sync::{broadcast, mpsc};
-use tokio::time;
+use common::{
+    actors::{Actor, ActorType, ControlMessage},
+    models::OpenInterestInsert,
+};
+use storage::{data_manager::DataManager, repositories::openinterest_repo::OpenInterestRepository};
+use tokio::{
+    sync::{broadcast, mpsc},
+    time::{self, Instant},
+};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::services::market_gateway::MarketEvent;
-use common::actors::{Actor, ActorType, ControlMessage};
-use common::models::AggTradeInsert;
-use storage::repositories::AggTradeRepository;
 
-pub struct AggTradeService {
+pub struct OpenInterestService {
     id: Uuid,
     rotating_pool: Arc<DataManager>,
-    trade_rx: broadcast::Receiver<Arc<MarketEvent>>,
+    interest_rx: broadcast::Receiver<Arc<MarketEvent>>,
 }
 
 #[async_trait]
-impl Actor for AggTradeService {
+impl Actor for OpenInterestService {
     fn id(&self) -> Uuid {
         self.id
     }
 
     fn name(&self) -> ActorType {
-        ActorType::AggTradeActor
+        ActorType::OpenInterestActor
     }
 
     async fn run(&mut self, supervisor_tx: mpsc::Sender<ControlMessage>) -> anyhow::Result<()> {
         let heartbeat_handle = self.spawn_heartbeat(supervisor_tx.clone());
 
-        info!("Starting AggTrade Ingestion Service");
-
-        let (db_tx, db_rx) = mpsc::channel(2000);
-
+        info!("Starting ForceOrder Ingestion Service");
+        let (db_tx, db_rx) = mpsc::channel(512);
         tokio::spawn(Self::db_writer(self.rotating_pool.clone(), db_rx));
 
         loop {
-            match self.trade_rx.recv().await {
-                Ok(event_arc) => {
-                    let event = &*event_arc;
+            match self.interest_rx.recv().await {
+                Ok(interest_arc) => {
+                    let event = &*interest_arc;
 
-                    if let MarketEvent::AggTrade(trade) = event {
-                        if let Err(e) = db_tx.send(trade.to_owned()).await {
+                    if let MarketEvent::OpenInterest(interest) = event {
+                        if let Err(e) = db_tx.send(interest.to_owned()).await {
                             heartbeat_handle.abort();
                             supervisor_tx.try_send(ControlMessage::Error(
                                 self.id,
@@ -56,53 +56,59 @@ impl Actor for AggTradeService {
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    warn!("AggTrade service lagged: missed {} signals", n);
+                    warn!("OpenInterest service lagged: missed {} signals", n);
                 }
                 Err(_) => {
                     heartbeat_handle.abort();
                     supervisor_tx
                         .send(ControlMessage::Error(
                             self.id,
-                            format!("{:?}: AggTrade channel closed unexpectedly.", self.name()),
+                            format!(
+                                "{:?}: OpenInterest channel closed unexpectedly.",
+                                self.name()
+                            ),
                         ))
                         .await?;
-                    bail!("AggTrade channel closed unexpectedly.");
+                    bail!("OpenInterest channel closed unexpectedly.")
                 }
             }
         }
     }
 }
 
-impl AggTradeService {
+impl OpenInterestService {
     pub fn new(
         rotating_pool: Arc<DataManager>,
-        trade_rx: broadcast::Receiver<Arc<MarketEvent>>,
+        interest_rx: broadcast::Receiver<Arc<MarketEvent>>,
     ) -> Self {
         Self {
             id: Uuid::new_v4(),
             rotating_pool,
-            trade_rx,
+            interest_rx,
         }
     }
 
-    async fn db_writer(r_pool: Arc<DataManager>, mut trade_rx: mpsc::Receiver<AggTradeInsert>) {
-        let mut buffer = Vec::with_capacity(1200);
+    async fn db_writer(
+        r_pool: Arc<DataManager>,
+        mut interest_rx: mpsc::Receiver<OpenInterestInsert>,
+    ) {
+        let mut buffer = Vec::with_capacity(1024);
         let mut last_flush = Instant::now();
 
         loop {
             tokio::select! {
-                result = trade_rx.recv() => {
+                result = interest_rx.recv() => {
                     match result {
-                        Some(trade) => {
-                            buffer.push(trade);
-                            if buffer.len() >= 1000 || last_flush.elapsed() >= Duration::from_secs(10) {
+                        Some(interest) => {
+                            buffer.push(interest);
+                            if buffer.len() >= 512 || last_flush.elapsed() >= Duration::from_secs(20) {
                                 Self::flush_batch(&*r_pool, &buffer).await;
                                 buffer.clear();
                                 last_flush = Instant::now();
                             }
                         }
                         None => {
-                            info!("DB Channel closed. Flushing remaining buffer.");
+                            info!("DB Channel closed. Flusing remaining buffer.");
                             if !buffer.is_empty() {
                                 Self::flush_batch(&*r_pool, &buffer).await;
                             }
@@ -111,7 +117,7 @@ impl AggTradeService {
                     }
                 }
 
-                _ = time::sleep(Duration::from_millis(2000)) => {
+                _ = time::sleep(Duration::from_secs(10)) => {
                     if !buffer.is_empty() {
                         Self::flush_batch(&*r_pool, &buffer).await;
                         buffer.clear();
@@ -122,11 +128,11 @@ impl AggTradeService {
         }
     }
 
-    async fn flush_batch(r_pool: &DataManager, batch: &[AggTradeInsert]) {
-        if let Err(e) = AggTradeRepository::insert_batch(r_pool, batch).await {
+    async fn flush_batch(r_pool: &DataManager, batch: &[OpenInterestInsert]) {
+        if let Err(e) = OpenInterestRepository::insert_batch(r_pool, batch).await {
             error!("DB write failed: {}", e);
         } else {
-            debug!("Wrote {} aggTrades to DB", batch.len());
+            debug!("Wrote {} OpenInterest to DB", batch.len());
         }
     }
 }

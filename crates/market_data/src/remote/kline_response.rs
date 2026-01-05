@@ -2,6 +2,8 @@ use serde::Deserialize;
 
 use common::models::KlineInsert;
 
+use crate::traits::RemoteResponse;
+
 #[derive(Deserialize, Debug)]
 pub struct KlineDataCombinedEvent {
     #[serde(rename(deserialize = "k"))]
@@ -36,8 +38,8 @@ pub struct KlineEvent {
     pub taker_buy_vol: String,
 }
 
-impl KlineDataCombinedEvent {
-    pub fn to_insertable(&self) -> Result<(KlineInsert, bool), serde_json::Error> {
+impl RemoteResponse<(KlineInsert, bool)> for KlineDataCombinedEvent {
+    fn to_insertable(&self) -> Result<(KlineInsert, bool), serde_json::Error> {
         Ok((
             KlineInsert {
                 symbol: self.data.symbol.clone(),

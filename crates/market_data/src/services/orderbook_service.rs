@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use async_trait::async_trait;
+use storage::data_manager::DataManager;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time;
 use tracing::{debug, error, info, warn};
@@ -11,12 +12,11 @@ use uuid::Uuid;
 use crate::services::market_gateway::MarketEvent;
 use common::actors::{Actor, ActorType, ControlMessage};
 use common::models::OrderBookInsert;
-use storage::db::RotatingPool;
 use storage::repositories::OrderBookRepository;
 
 pub struct OrderBookService {
     id: Uuid,
-    rotating_pool: Arc<RotatingPool>,
+    rotating_pool: Arc<DataManager>,
     order_tx: broadcast::Receiver<Arc<MarketEvent>>,
 }
 
@@ -73,7 +73,7 @@ impl Actor for OrderBookService {
 
 impl OrderBookService {
     pub fn new(
-        rotating_pool: Arc<RotatingPool>,
+        rotating_pool: Arc<DataManager>,
         order_tx: broadcast::Receiver<Arc<MarketEvent>>,
     ) -> Self {
         Self {
@@ -84,7 +84,7 @@ impl OrderBookService {
     }
 
     async fn db_writer(
-        rotating_pool: Arc<RotatingPool>,
+        rotating_pool: Arc<DataManager>,
         mut order_rx: mpsc::Receiver<OrderBookInsert>,
     ) {
         let mut buffer = Vec::with_capacity(750);
@@ -123,19 +123,8 @@ impl OrderBookService {
         }
     }
 
-    async fn flush_batch(rotating_pool: &RotatingPool, batch: &[OrderBookInsert]) {
-        let pool = loop {
-            match rotating_pool.get().await {
-                Ok(p) => break p,
-                Err(e) => {
-                    error!("Failed to get DB pool: {}. Retrying...", e);
-                    time::sleep(Duration::from_secs(5)).await;
-                    continue;
-                }
-            }
-        };
-
-        if let Err(e) = OrderBookRepository::insert_batch(&pool, batch).await {
+    async fn flush_batch(rotating_pool: &DataManager, batch: &[OrderBookInsert]) {
+        if let Err(e) = OrderBookRepository::insert_batch(rotating_pool, batch).await {
             error!("DB write failed: {}", e);
         } else {
             debug!("Wrote {} order_books to DB.", batch.len());

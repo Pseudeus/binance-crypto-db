@@ -44,42 +44,37 @@ impl Supervisor {
         self.actor_factories.insert(actor_type, factory);
     }
 
+    fn initialize_actors(&mut self, supervisor_tx: mpsc::Sender<ControlMessage>) {
+        let actors: Vec<(ActorType, Box<dyn Actor>)> = self
+            .actor_factories
+            .iter()
+            .map(|f| (f.0.clone(), f.1()))
+            .collect();
+
+        actors.into_iter().for_each(|(actor, factory)| {
+            self.spawn_actor(factory, actor, supervisor_tx.clone());
+        });
+    }
+
     pub async fn start(&mut self) {
         let mut check_interval = time::interval(Duration::from_secs(1));
         let timeout_duration = Duration::from_secs(3);
 
         let supervisor_tx = self.tx.clone();
         let mut supervisor_rx = self.rx.take().expect("Supervisor started twice");
-
-        let actors: Vec<ActorType> = self
-            .actor_factories
-            .iter()
-            .map(|(actor, _)| actor.clone())
-            .collect();
-
-        actors.into_iter().for_each(|actor| {
-            self.spawn_actor(actor, supervisor_tx.clone());
-        });
+        self.initialize_actors(supervisor_tx.clone());
 
         loop {
             tokio::select! {
                 Some(msg) = supervisor_rx.recv() => {
                     match msg {
-                        ControlMessage::Spawn(mut actor) => {
-                            let actor_id = actor.id();
-                            info!("Spawning dynamic actor: {:?}", actor_id);
+                        ControlMessage::Spawn(actor) => {
+                            info!("Spawning dynamic actor: {:?}", actor.id());
                             let tx = supervisor_tx.clone();
-                            let handle = tokio::spawn(async move {
-                                if let Err(e) = actor.run(tx).await {
-                                    error!("Dynamic actor {:?} crashed: {}", actor_id, e);
-                                }
-                            });
-                            self.handles.insert(actor_id, handle);
-                            self.actor_types.insert(actor_id, ActorType::Dynamic);
-                            self.pulses.insert(actor_id, Instant::now());
+                            self.spawn_actor(actor, ActorType::Dynamic, tx);
                         },
-                        ControlMessage::Heartbeat(actor_type) => {
-                            self.pulses.insert(actor_type, Instant::now());
+                        ControlMessage::Heartbeat(actor_id) => {
+                            self.pulses.insert(actor_id, Instant::now());
                         }
                         ControlMessage::Shutdown(actor_id) => {
                             warn!("{:?} is shutting down gracefully.", actor_id);
@@ -89,9 +84,9 @@ impl Supervisor {
                                 handle.abort();
                             }
                         },
-                        ControlMessage::Error(actor_type, error_msg) => {
-                            error!("Actor {:?} reported error: {}", actor_type, error_msg);
-                            self.pulses.insert(actor_type, Instant::now());
+                        ControlMessage::Error(actor_id, error_msg) => {
+                            error!("Actor {:?} reported error: {}", actor_id, error_msg);
+                            self.pulses.insert(actor_id, Instant::now());
                         },
                     }
                 }
@@ -115,7 +110,8 @@ impl Supervisor {
                         let actor_t = self.actor_types[&invalid_id];
                         if self.actor_factories.contains_key(&actor_t) {
                             info!("Restarting actor type {:?} (old id: {:?}", actor_t, invalid_id);
-                            self.spawn_actor(actor_t, supervisor_tx.clone());
+                            let new_actor = self.actor_factories[&actor_t]();
+                            self.spawn_actor(new_actor, actor_t, supervisor_tx.clone());
                         } else {
                             warn!("Dynamic actor {:?} died and will not be restarted.", invalid_id);
                         }
@@ -128,11 +124,15 @@ impl Supervisor {
         }
     }
 
-    fn spawn_actor(&mut self, actor_type: ActorType, tx: mpsc::Sender<ControlMessage>) {
-        let mut new_actor = self.actor_factories[&actor_type]();
-        let actor_id = new_actor.id();
+    fn spawn_actor(
+        &mut self,
+        mut actor: Box<dyn Actor>,
+        actor_type: ActorType,
+        tx: mpsc::Sender<ControlMessage>,
+    ) {
+        let actor_id = actor.id();
         let new_actor_handle = tokio::spawn(async move {
-            if let Err(e) = new_actor.run(tx).await {
+            if let Err(e) = actor.run(tx).await {
                 error!("Actor {:?} crashed: {}", &actor_type, e);
             }
         });
