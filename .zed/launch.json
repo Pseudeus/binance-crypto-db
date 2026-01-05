@@ -1,0 +1,44 @@
+[
+  {
+    "type": "lldb",
+    "request": "launch",
+    "name": "Debug Bot",
+    "program": "${workspaceRoot}/target/debug/bot",
+    "args": [],
+    "cwd": "${workspaceRoot}",
+    "env": {
+      "RUST_LOG": "debug,executor=trace,market_data=debug,strategy=debug,storage=debug",
+      "RUST_BACKTRACE": "full",
+      "RUST_LOG_STYLE": "always",
+    },
+    "sourceLanguages": ["rust"],
+    "preLaunchTask": "cargo-build-debug",
+    "terminal": "integrated",
+  },
+  {
+    "type": "lldb",
+    "request": "launch",
+    "name": "Debug Tests",
+    "program": "${workspaceRoot}/target/debug/deps/${workspaceFolderBasename}-*",
+    "args": [],
+    "cwd": "${workspaceRoot}",
+    "env": {
+      "RUST_LOG": "debug",
+      "RUST_BACKTRACE": "full",
+    },
+    "sourceLanguages": ["rust"],
+  },
+  {
+    "type": "lldb",
+    "request": "launch",
+    "name": "Debug with Release Optimizations",
+    "program": "${workspaceRoot}/target/release/bot",
+    "args": [],
+    "cwd": "${workspaceRoot}",
+    "env": {
+      "RUST_LOG": "info",
+      "RUST_BACKTRACE": "1",
+    },
+    "sourceLanguages": ["rust"],
+  },
+]

@@ -3,20 +3,20 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use async_trait::async_trait;
-use common::models::{ForceOrderInsert, MarkPriceInsert};
+use common::models::{ForceOrderInsert, MarkPriceInsert, OpenInterestInsert};
 use futures_util::{SinkExt, StreamExt};
 use tokio::{
     sync::{broadcast, mpsc},
     time::{self, Duration},
 };
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::remote::markprice_response::MarkPriceEvent;
+use crate::remote::{binance_poller::BinancePoller, markprice_response::MarkPriceEvent};
 use crate::remote::{forceorder_response::ForceOrderCombinedEvent, get_futures_ws_base_url};
 use crate::{
     remote::{
@@ -37,6 +37,7 @@ pub enum MarketEvent {
     Kline((KlineInsert, bool)),
     MarkPrice(MarkPriceInsert),
     ForceOrder(ForceOrderInsert),
+    OpenInterest(OpenInterestInsert),
 }
 
 #[derive(Deserialize)]
@@ -91,6 +92,9 @@ impl Actor for MarketGateway {
             _ = self.websocket_connection(&furl, supervisor_tx.clone()) => {
                 heartbeat_handle.abort()
             }
+            _ = self.oi_connection() => {
+                heartbeat_handle.abort();
+            }
         }
         Ok(())
     }
@@ -102,6 +106,31 @@ impl MarketGateway {
             id: Uuid::new_v4(),
             symbols: symbols.iter().map(|s| s.to_string()).collect(),
             market_tx,
+        }
+    }
+
+    async fn oi_connection(&self) -> anyhow::Result<()> {
+        let poller = BinancePoller::new();
+
+        loop {
+            let general_result = poller.fetch_all_open_interest(&self.symbols).await;
+
+            if let Err(e) = general_result {
+                bail!("OI connection error: {}", e);
+            } else {
+                let results = general_result.unwrap();
+
+                results.into_iter().for_each(|res| match res {
+                    Ok(data) => {
+                        let _ = self
+                            .market_tx
+                            .send(Arc::new(MarketEvent::OpenInterest(data)));
+                    }
+                    Err(e) => {
+                        warn!("Failed to fetch OI: {}", e);
+                    }
+                });
+            }
         }
     }
 

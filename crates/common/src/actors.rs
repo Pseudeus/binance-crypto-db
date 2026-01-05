@@ -12,6 +12,7 @@ pub enum ActorType {
     GatewayActor,
     MarkPriceActor,
     ForceOrderActor,
+    OpenInterestActor,
     Dynamic,
 }
 

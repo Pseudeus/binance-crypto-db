@@ -2,9 +2,11 @@ use std::env;
 
 pub mod aggtrade_response;
 pub mod binance_client;
+pub mod binance_poller;
 pub mod forceorder_response;
 pub mod kline_response;
 pub mod markprice_response;
+pub mod openinterest_response;
 pub mod orderbook_response;
 
 pub use aggtrade_response::{AggTradeCombinedEvent, AggTradeEvent};

@@ -1,6 +1,7 @@
 use dotenvy::dotenv;
 use market_data::services::forceorder_service::ForceOrderService;
 use market_data::services::markprice_service::MarkPriceService;
+use market_data::services::openinterest_service::OpenInterestService;
 use std::{env, sync::Arc};
 use storage::data_manager::DataManager;
 use tokio::sync::broadcast;
@@ -115,6 +116,18 @@ async fn main() -> anyhow::Result<()> {
             Box::new(ForceOrderService::new(
                 pool_for_force_order.clone(),
                 tx_for_force_order.resubscribe(),
+            ))
+        }),
+    );
+
+    let pool_for_open_interest = data_manager.clone();
+    let tx_for_open_interest = market_tx.subscribe();
+    supervisor.register_actor(
+        ActorType::OpenInterestActor,
+        Box::new(move || {
+            Box::new(OpenInterestService::new(
+                pool_for_open_interest.clone(),
+                tx_for_open_interest.resubscribe(),
             ))
         }),
     );

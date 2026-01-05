@@ -1,0 +1,17 @@
+[
+  {
+    "type": "lldb",
+    "request": "launch",
+    "label": "Debug Bot",
+    "program": "${workspaceRoot}/target/debug/bot",
+    "args": [],
+    "cwd": "${workspaceRoot}",
+    "env": {
+      "RUST_LOG": "info,executor=debug",
+      "RUST_BACKTRACE": "1"
+    },
+    "sourceLanguages": [
+      "rust"
+    ]
+  }
+]
