@@ -42,9 +42,19 @@ pub struct Balance {
 
 #[derive(Debug, Deserialize)]
 pub struct AccountInformation {
+    #[serde(rename = "makerCommission")]
+    pub maker_commission: f64,
+    #[serde(rename = "takerCommission")]
+    pub taker_commission: f64,
     pub balances: Vec<Balance>,
     #[serde(rename = "canTrade")]
     pub can_trade: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListenKeyResponse {
+    #[serde(rename = "listenKey")]
+    pub listen_key: String,
 }
 
 #[derive(Clone)]
@@ -105,8 +115,7 @@ impl BinanceClient {
 
     pub async fn post_order(&self, symbol: &str, side: &str, quantity: f64) -> Result<OrderResponse, Box<dyn std::error::Error + Send + Sync>> {
         let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .duration_since(UNIX_EPOCH)?
             .as_millis() as u64;
 
         // Simple Market Order for MVP
@@ -139,5 +148,40 @@ impl BinanceClient {
 
         let order_resp = resp.json::<OrderResponse>().await?;
         Ok(order_resp)
+    }
+
+    pub async fn get_listen_key(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let url = format!("{}/api/v3/userDataStream", self.base_url);
+        let resp = self.client
+            .post(&url)
+            .header("X-MBX-APIKEY", &self.api_key)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let error_text = resp.text().await?;
+            error!("Binance ListenKey Request Failed: {}", error_text);
+            return Err(error_text.into());
+        }
+
+        let listen_key_resp = resp.json::<ListenKeyResponse>().await?;
+        Ok(listen_key_resp.listen_key)
+    }
+
+    pub async fn refresh_listen_key(&self, listen_key: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let url = format!("{}/api/v3/userDataStream?listenKey={}", self.base_url, listen_key);
+        let resp = self.client
+            .put(&url)
+            .header("X-MBX-APIKEY", &self.api_key)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let error_text = resp.text().await?;
+            error!("Binance ListenKey Refresh Failed: {}", error_text);
+            return Err(error_text.into());
+        }
+
+        Ok(())
     }
 }

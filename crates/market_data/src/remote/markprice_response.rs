@@ -1,4 +1,4 @@
-use common::models::markprice::MarkPriceInsert;
+use common::models::{MarkPriceInsert, Price};
 use serde::Deserialize;
 
 use crate::traits::RemoteResponse;
@@ -20,8 +20,8 @@ impl RemoteResponse<MarkPriceInsert> for MarkPriceEvent {
         Ok(MarkPriceInsert {
             time: self.get_time_f64(),
             symbol: self.symbol.clone(),
-            mark_price: self.mark_price.parse::<f64>().unwrap_or(0_f64),
-            index_price: self.index_price.parse::<f64>().unwrap_or(0_f64),
+            mark_price: Price(self.mark_price.parse::<f64>().unwrap_or(0_f64)),
+            index_price: Price(self.index_price.parse::<f64>().unwrap_or(0_f64)),
             funding_rate: self.funding_rate.parse::<f64>().unwrap_or(0_f64),
         })
     }

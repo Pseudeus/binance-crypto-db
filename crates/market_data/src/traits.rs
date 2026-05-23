@@ -7,8 +7,8 @@ pub trait RemoteResponse<T> {
         let now = SystemTime::now();
         let timestamp_float = now
             .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_secs_f64();
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
 
         timestamp_float
     }

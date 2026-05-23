@@ -1,71 +1,93 @@
+use common::actors::{Actor, ActorType, ControlMessage};
 use common::models::TradeSignal;
+use futures_util::future::BoxFuture;
 use market_data::remote::BinanceClient;
-use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 pub struct ExecutionService {
+    id: Uuid,
     client: BinanceClient,
+    rx: broadcast::Receiver<TradeSignal>,
 }
 
 impl ExecutionService {
-    pub fn new() -> Self {
+    pub fn new(rx: broadcast::Receiver<TradeSignal>) -> Self {
         Self {
+            id: Uuid::new_v4(),
             client: BinanceClient::new(),
+            rx,
         }
     }
+}
 
-    pub async fn start(self, mut rx: broadcast::Receiver<TradeSignal>) {
+impl Actor for ExecutionService {
+    fn id(&self) -> Uuid {
+        self.id
+    }
+
+    fn name(&self) -> ActorType {
+        ActorType::ExecutionActor
+    }
+
+    fn run(
+        &mut self,
+        supervisor_tx: mpsc::Sender<ControlMessage>,
+    ) -> BoxFuture<'_, anyhow::Result<()>> {
+        let _heartbeat_handle = self.spawn_heartbeat(supervisor_tx.clone());
         info!("Starting Execution Service (Binance Connected)");
 
-        // Log Initial Balance
-        match self.client.get_account().await {
-            Ok(info) => {
-                info!("Binance Account Connected. Can Trade: {}", info.can_trade);
-                for b in info
-                    .balances
-                    .iter()
-                    .filter(|b| b.free.parse::<f64>().unwrap_or(0.0) > 0.0)
-                {
-                    info!("Balance: {} Free={} Locked={}", b.asset, b.free, b.locked);
-                }
-            }
-            Err(e) => error!("Failed to fetch account info: {}", e),
-        }
-
-        loop {
-            match rx.recv().await {
-                Ok(signal) => {
-                    info!("RECEIVED SIGNAL: {:?} - Executing...", signal);
-
-                    // EXECUTE ORDER
-                    // For safety in this phase, we might want to hardcode a small quantity or use the one from signal.
-                    // Let's assume the signal provides a safe quantity.
-
-                    match self
-                        .client
-                        .post_order(&signal.symbol, &signal.side, signal.quantity)
-                        .await
+        Box::pin(async move {
+            // Log Initial Balance
+            match self.client.get_account().await {
+                Ok(info) => {
+                    info!(
+                        "Binance Account Connected. Can Trade: {} (Maker: {}bps, Taker: {}bps)",
+                        info.can_trade, info.maker_commission, info.taker_commission
+                    );
+                    for b in info
+                        .balances
+                        .iter()
+                        .filter(|b| b.free.parse::<f64>().unwrap_or(0.0) > 0.0)
                     {
-                        Ok(order) => {
-                            info!(
-                                "ORDER EXECUTED: ID={}, Status={}",
-                                order.order_id, order.status
-                            );
-                        }
-                        Err(e) => {
-                            error!("ORDER FAILED: {}", e);
-                        }
+                        info!("Balance: {} Free={} Locked={}", b.asset, b.free, b.locked);
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    warn!("Execution service lagged: missed {} signals", n);
-                }
-                Err(_) => {
-                    info!("Execution channel closed. Stopping service.");
-                    break;
+                Err(e) => error!("Failed to fetch account info: {}", e),
+            }
+
+            loop {
+                match self.rx.recv().await {
+                    Ok(signal) => {
+                        info!("RECEIVED SIGNAL: {:?} - Executing...", signal);
+
+                        match self
+                            .client
+                            .post_order(&signal.symbol, &signal.side, *signal.quantity)
+                            .await
+                        {
+                            Ok(order) => {
+                                info!(
+                                    "ORDER EXECUTED: ID={}, Status={}",
+                                    order.order_id, order.status
+                                );
+                            }
+                            Err(e) => {
+                                error!("ORDER FAILED: {}", e);
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("Execution service lagged: missed {} signals", n);
+                    }
+                    Err(_) => {
+                        info!("Execution channel closed. Stopping service.");
+                        break;
+                    }
                 }
             }
-        }
+            Ok(())
+        })
     }
 }

@@ -1,0 +1,38 @@
+[sys_paths]
+workdir = "./"
+utils = "./utils"
+
+[binance]
+base_url = "https://api.binance.com"
+ws_url = "wss://stream.binance.com:9443"
+futures_ws_url = "wss://fstream.binance.com"
+symbols = [
+    "btcusdt",
+    "ethusdt",
+    "bnbusdt",
+    "solusdt",
+    "avaxusdt",
+    "nearusdt",
+    "polusdt",
+    "dogeusdt",
+    "shibusdt",
+    "pepeusdt",
+    "wifiusdt",
+    "bonkusdt",
+    "xrpusdt",
+    "adausdt",
+    "dotusdt"
+]
+
+[strategy]
+risk_factor = 0.01
+risk_ceiling = 0.02
+default_fee_rate = 0.001
+margin_of_safety = 0.0005
+
+[inference]
+model_path = "models/strategy.onnx"
+collected_db_path = "collected_data.sql.zst"
+
+[debugging]
+rust_log = [ "info" ]

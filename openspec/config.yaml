@@ -1,0 +1,54 @@
+schema: spec-driven
+
+context: |
+  # Project: Binance Crypto Trading Bot (High-Performance/HFT)
+
+  ## Architecture (Dual-Node Configuration)
+  - **Training Node (The Lab):** Workstation (Fedora/ROCm). Handles heavy DL training, backtesting, and ONNX export.
+  - **Execution Node (The Trader):** Orange Pi RV2 (RISC-V 64-bit). Single-device architecture for zero network latency between feature engineering and inference.
+  - **Target:** `riscv64gc-unknown-linux-gnu`. Optimized with LTO (fat) and codegen-units=1.
+
+  ## Tech Stack
+  - **Runtime (Execution):** Rust (idiomatic, async `tokio`).
+  - **Data Ingestion:** `tokio-tungstenite` (WebSockets), `aggTrade`, `depth20`, `bookTicker`, `markPrice`.
+  - **Core Libraries:** `sqlx` (SQLite), `teloxide` (Telegram), `tract-onnx` (Inference), `ta` (Indicators), `ndarray`, `serde`.
+  - **Zero-Copy Ingestion:** Data wrapped in `Arc<>` and broadcast via `tokio::sync::broadcast`.
+
+  ## Domain Knowledge & Roadmap
+  - **Microstructure Features:** RSI, OBI (Order Book Imbalance), TFI (Trade Flow Imbalance), Volatility.
+  - **Labeling Strategy:** Triple Barrier Method (Profit Take, Stop Loss, Time Horizon).
+  - **Golden Dataset Roadmap:** Expanding to Futures Data (Funding Rates, Open Interest, Liquidations) and BTC Correlation (Beta Analysis).
+  - **Inference Strategy:** CPU-based ONNX inference for tabular data (minimizing PCIe/Network latency).
+
+  ## Technical Standards
+  - **Rust Safety:** Strict type-safety, NewType patterns for `Price`, `Quantity`, `Usdt`, `Bps`. NO `unwrap()` in code paths reachable from ingest.
+  - **Async Patterns:** Master `tokio` channels, avoid actor deadlock, use `async-trait` sparingly to preserve performance.
+  - **Clean Code:** Prioritize readability over cleverness. Any file >250 lines requires explicit justification in docs.
+  - **MLOps:** Empirical reproduction of bugs via regression tests; ONNX input vector consistency is critical.
+
+rules:
+  proposal:
+    - Always include a "Latency Impact" section (Zero-copy vs. Cloning).
+    - Define "Success Metrics" (e.g., Prediction Accuracy, PnL, System Latency).
+    - Analyze impact on RISC-V CPU/RAM (8GB LPDDR4 limit).
+    - Explicitly state if the change impacts the "Hot Path" (Ingestion -> Features -> Inference).
+    - Specify if the change requires new training data or modifies the ONNX input vector.
+  design:
+    - Use ASCII diagrams for Actor communication and Data Flow (MarketEvent to Strategy).
+    - Document data structures with an emphasis on memory footprint and cache-friendliness.
+    - Specify synchronization primitives (e.g., `broadcast` vs `mpsc`) and justification.
+    - Justify the choice of `async` abstractions vs concrete types (Trade-off: Flexibility vs Performance).
+  tasks:
+    - Every "Implementation" task MUST be followed by a "Validation" task.
+    - Training-related tasks must include "ONNX Export & Shape Verification".
+    - Tasks must be atomic (max 4 hours).
+    - Implementation MUST use `cargo doc` standards (///) including complexity analysis.
+    - Any file exceeding 250 lines MUST include a "Complexity Justification" section in its documentation.
+    - Verify no `unwrap()` or `panic!()` in ingest-driven hot paths.
+  spec:
+    - Enforce NewType patterns for all financial units (`Price`, `Qty`, `Bps`, `Usdt`).
+    - Define sampling intervals (e.g., 100ms for L2 Depth, 1s for Mark Price).
+    - Require unit tests for all edge cases (zero volume, negative price, disconnects).
+    - Maintain strict separation of concerns (Actors vs. Pure Math Calculators).
+    - Prioritize O(1) or O(log N) time complexity for real-time feature engineering.
+    - Enforce optimal balance between time and memory complexity (O-notation awareness).

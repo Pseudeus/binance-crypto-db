@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 common = { path = "../common" }
+market_data = { path = "../market_data" }
 tract-onnx = { workspace = true }
 ndarray = { workspace = true }
 ta = { workspace = true }
@@ -13,3 +14,6 @@ tracing = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+uuid = { workspace = true }
+anyhow = { workspace = true }
+futures-util = { workspace = true }

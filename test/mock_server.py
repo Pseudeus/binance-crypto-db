@@ -66,8 +66,8 @@ class BinanceMockHandler(http.server.SimpleHTTPRequestHandler):
             print("\n[MOCK BINANCE] RECEIVED ACCOUNT INFO REQUEST")
             
             response = {
-                "makerCommission": 10,
-                "takerCommission": 10,
+                "makerCommission": 15,
+                "takerCommission": 15,
                 "buyerCommission": 0,
                 "sellerCommission": 0,
                 "canTrade": True,

@@ -1,4 +1,4 @@
-use common::models::force_order::ForceOrderInsert;
+use common::models::{ForceOrderInsert, Price, Quantity};
 use serde::Deserialize;
 
 use crate::traits::RemoteResponse;
@@ -27,8 +27,8 @@ impl RemoteResponse<ForceOrderInsert> for ForceOrderCombinedEvent {
             time: self.get_time_f64(),
             symbol: self.data.symbol.clone(),
             side: self.data.side.clone(),
-            price: self.data.price.parse::<f64>().unwrap_or(0_f64),
-            quantity: self.data.quantity.parse::<f64>().unwrap_or(0_f64),
+            price: Price(self.data.price.parse::<f64>().unwrap_or(0_f64)),
+            quantity: Quantity(self.data.quantity.parse::<f64>().unwrap_or(0_f64)),
         })
     }
 }

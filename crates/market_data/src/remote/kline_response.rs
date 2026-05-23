@@ -18,8 +18,6 @@ pub struct KlineEvent {
     pub start_time: u64,
     #[serde(rename(deserialize = "T"))]
     pub close_time: u64,
-    #[serde(rename(deserialize = "i"))]
-    pub interval: String,
     #[serde(rename(deserialize = "o"))]
     pub open_price: String,
     #[serde(rename(deserialize = "c"))]
@@ -45,7 +43,6 @@ impl RemoteResponse<(KlineInsert, bool)> for KlineDataCombinedEvent {
                 symbol: self.data.symbol.clone(),
                 start_time: self.data.start_time as i32,
                 close_time: self.data.close_time as i32,
-                interval: self.data.interval.clone(),
                 open_price: self.data.open_price.parse::<f32>().unwrap_or(0_f32),
                 close_price: self.data.close_price.parse::<f32>().unwrap_or(0_f32),
                 high_price: self.data.high_price.parse::<f32>().unwrap_or(0_f32),

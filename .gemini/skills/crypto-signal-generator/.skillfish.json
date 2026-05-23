@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "name": "crypto-signal-generator",
+  "owner": "bbgnsurftech",
+  "repo": "claude-skills-collection",
+  "path": "plugins/claude-code-plugins-plus/plugins/crypto/crypto-signal-generator/skills/crypto-signal-generator",
+  "branch": "main",
+  "sha": "3210175fc89330f4d75cfb57f25136772841098b",
+  "source": "manual"
+}

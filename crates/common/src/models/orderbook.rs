@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct OrderBook {
@@ -8,7 +10,7 @@ pub struct OrderBook {
     pub asks: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderBookInsert {
     pub time: f64,
     pub symbol: String,

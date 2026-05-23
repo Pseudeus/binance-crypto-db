@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 pub mod backup_actor;
+pub mod storage_actor;
 
 #[derive(Error, Debug)]
 pub enum BackupScriptError {

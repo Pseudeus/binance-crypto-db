@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct Kline {
@@ -5,7 +7,6 @@ pub struct Kline {
     pub symbol: String,
     pub start_time: i32,
     pub close_time: i32,
-    pub interval: String,
     pub open_price: f32,
     pub close_price: f32,
     pub high_price: f32,
@@ -15,12 +16,11 @@ pub struct Kline {
     pub taker_buy_vol: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KlineInsert {
     pub symbol: String,
     pub start_time: i32,
     pub close_time: i32,
-    pub interval: String,
     pub open_price: f32,
     pub close_price: f32,
     pub high_price: f32,

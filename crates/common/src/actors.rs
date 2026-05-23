@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use async_trait::async_trait;
+use futures_util::future::BoxFuture;
 use tokio::{sync::mpsc, task::JoinHandle};
 use uuid::Uuid;
 
@@ -10,9 +10,15 @@ pub enum ActorType {
     KlinesActor,
     OrderBookActor,
     GatewayActor,
+    PublicStreamActor,
+    UserStreamActor,
+    FuturesStreamActor,
     MarkPriceActor,
     ForceOrderActor,
     OpenInterestActor,
+    StrategyActor,
+    ExecutionActor,
+    StorageActor,
     Dynamic,
 }
 
@@ -36,7 +42,6 @@ impl std::fmt::Debug for ControlMessage {
 }
 
 /// The trait that all restartable services must implement
-#[async_trait]
 pub trait Actor: Send + Sync {
     /// The unique name of the actor (e.g., "AggTrade")
     fn name(&self) -> ActorType;
@@ -45,7 +50,10 @@ pub trait Actor: Send + Sync {
 
     /// The main loop of the actor.
     /// It must periodically send `ControlMessage::Heartbeat` to the supervisor.
-    async fn run(&mut self, supervisor_tx: mpsc::Sender<ControlMessage>) -> anyhow::Result<()>;
+    fn run(
+        &mut self,
+        supervisor_tx: mpsc::Sender<ControlMessage>,
+    ) -> BoxFuture<'_, anyhow::Result<()>>;
 
     fn spawn_heartbeat(&self, supervisor_tx: mpsc::Sender<ControlMessage>) -> JoinHandle<()> {
         let id = self.id();

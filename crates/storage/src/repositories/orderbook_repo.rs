@@ -1,34 +1,64 @@
 use common::models::OrderBookInsert;
+use sqlx::QueryBuilder;
+use std::sync::Arc;
 
-use crate::data_manager::DataManager;
+use crate::{db::RotatingPool, repositories::Repository, storage_write_buffer::StorageWriteBuffer};
 
-pub struct OrderBookRepository;
+const BATCH_SIZE: usize = (i16::MAX / 4) as usize;
+
+pub type OrderBookWriterBuffer = StorageWriteBuffer<OrderBookInsert, OrderBookRepository>;
+
+pub struct OrderBookRepository {
+    pool: Arc<RotatingPool>,
+}
 
 impl OrderBookRepository {
-    pub async fn insert_batch(
-        data_manager: &DataManager,
-        books: &[OrderBookInsert],
-    ) -> Result<(), sqlx::Error> {
+    pub fn new(pool: Arc<RotatingPool>) -> Self {
+        Self { pool: pool.clone() }
+    }
+}
+
+impl Repository for OrderBookRepository {
+    type Input = OrderBookInsert;
+
+    async fn insert(&self, book: &Self::Input) -> Result<(), sqlx::Error> {
+        let (pool, _) = self.pool.get_pool().await?;
+        sqlx::query(
+            r#"
+                INSERT INTO order_books(time, symbol_id, bids, asks)
+                VALUES (?, ?, ?, ?)
+            "#,
+        )
+        .bind(book.time)
+        .bind(&book.symbol)
+        .bind(&book.bids)
+        .bind(&book.asks)
+        .execute(&pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_batch(&self, books: &[Self::Input]) -> Result<(), sqlx::Error> {
         if books.is_empty() {
             return Ok(());
         }
-        let (pool, _) = data_manager.pool_rotator.get_pool().await?;
+        let (pool, _) = self.pool.get_pool().await?;
         let mut tx = pool.begin().await?;
 
-        for b in books {
-            let symbol_id = data_manager.get_symbol_id(&b.symbol).await?;
-            sqlx::query(
+        for chunk in books.chunks(BATCH_SIZE) {
+            let mut query_builder = QueryBuilder::new(
                 r#"
                     INSERT INTO order_books(time, symbol_id, bids, asks)
-                    VALUES (?, ?, ?, ?)
                 "#,
-            )
-            .bind(b.time)
-            .bind(symbol_id)
-            .bind(&b.bids)
-            .bind(&b.asks)
-            .execute(&mut *tx)
-            .await?;
+            );
+            query_builder.push_values(chunk, |mut b, book| {
+                b.push_bind(book.time)
+                    .push_bind(&book.symbol)
+                    .push_bind(&book.bids)
+                    .push_bind(&book.asks);
+            });
+            let query = query_builder.build();
+            query.execute(&mut *tx).await?;
         }
         tx.commit().await?;
         Ok(())

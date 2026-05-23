@@ -8,6 +8,7 @@ pub mod kline_response;
 pub mod markprice_response;
 pub mod openinterest_response;
 pub mod orderbook_response;
+pub mod user_stream_response;
 
 pub use aggtrade_response::{AggTradeCombinedEvent, AggTradeEvent};
 pub use binance_client::BinanceClient;

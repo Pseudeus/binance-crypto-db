@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
-use tract_onnx::prelude::*;
 use tracing::{debug, error, info, warn};
+use tract_onnx::prelude::*;
 
 type RunnableModel = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
 
@@ -23,7 +23,10 @@ impl InferenceEngine {
                 }
             }
         } else {
-            warn!("ONNX model not found at {:?}. Running in SIMULATION mode (Dummy Predictions).", path);
+            warn!(
+                "ONNX model not found at {:?}. Running in SIMULATION mode (Dummy Predictions).",
+                path
+            );
             None
         };
 
@@ -38,22 +41,31 @@ impl InferenceEngine {
         Ok(model)
     }
 
-    pub fn predict(&self, features: &[f32]) -> Result<InferenceResult, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn predict(
+        &self,
+        features: &[f32],
+    ) -> Result<InferenceResult, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(model) = &self.model {
             // Create input tensor (1, N)
-            let tensor = tract_ndarray::Array::from_shape_vec((1, features.len()), features.to_vec())?
-                .into_tensor();
+            let tensor =
+                tract_ndarray::Array::from_shape_vec((1, features.len()), features.to_vec())?
+                    .into_tensor();
 
             let result = model.run(tvec!(tensor.into()))?;
-            
+
             // Output is [1, 3] Logits (Hold, Buy, Sell)
             let logits = result[0].to_array_view::<f32>()?;
             let logits_slice = logits.as_slice().ok_or("Failed to get logits slice")?;
 
             // Softmax
-            let max_logit = logits_slice.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+            let max_logit = logits_slice
+                .iter()
+                .fold(f32::NEG_INFINITY, |a, &b| a.max(b));
             let exp_sum: f32 = logits_slice.iter().map(|&x| (x - max_logit).exp()).sum();
-            let probs: Vec<f32> = logits_slice.iter().map(|&x| (x - max_logit).exp() / exp_sum).collect();
+            let probs: Vec<f32> = logits_slice
+                .iter()
+                .map(|&x| (x - max_logit).exp() / exp_sum)
+                .collect();
 
             // ArgMax
             let mut max_index = 0;
@@ -71,7 +83,10 @@ impl InferenceEngine {
             })
         } else {
             // Dummy logic for simulation
-            Ok(InferenceResult { class: 0, confidence: 0.0 })
+            Ok(InferenceResult {
+                class: 0,
+                confidence: 0.0,
+            })
         }
     }
 }

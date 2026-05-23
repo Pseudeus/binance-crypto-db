@@ -1,36 +1,69 @@
 use common::models::ForceOrderInsert;
+use sqlx::QueryBuilder;
+use std::sync::Arc;
 
-use crate::data_manager::DataManager;
+use crate::{db::RotatingPool, repositories::Repository, storage_write_buffer::StorageWriteBuffer};
 
-pub struct ForceOrderRepository;
+const BATCH_SIZE: usize = (i16::MAX / 5) as usize;
+
+pub type ForceOrderWriterBuffer = StorageWriteBuffer<ForceOrderInsert, ForceOrderRepository>;
+
+pub struct ForceOrderRepository {
+    pool: Arc<RotatingPool>,
+}
 
 impl ForceOrderRepository {
-    pub async fn insert_batch(
-        data_manager: &DataManager,
-        orders: &[ForceOrderInsert],
-    ) -> Result<(), sqlx::Error> {
+    pub fn new(pool: Arc<RotatingPool>) -> Self {
+        Self { pool: pool.clone() }
+    }
+}
+
+impl Repository for ForceOrderRepository {
+    type Input = ForceOrderInsert;
+
+    async fn insert(&self, order: &Self::Input) -> Result<(), sqlx::Error> {
+        let (pool, _) = self.pool.get_pool().await?;
+        sqlx::query(
+            r#"
+                INSERT INTO liquidations (
+                    time, symbol_id, side, price, quantity
+                ) VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(order.time)
+        .bind(&order.symbol)
+        .bind(order.side.clone())
+        .bind(order.price.0)
+        .bind(order.quantity.0)
+        .execute(&pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_batch(&self, orders: &[Self::Input]) -> Result<(), sqlx::Error> {
         if orders.is_empty() {
             return Ok(());
         }
-        let (pool, _) = data_manager.pool_rotator.get_pool().await?;
+        let (pool, _) = self.pool.get_pool().await?;
         let mut tx = pool.begin().await?;
 
-        for order in orders {
-            let symbol_id = data_manager.get_symbol_id(&order.symbol).await?;
-            sqlx::query(
+        for chunk in orders.chunks(BATCH_SIZE) {
+            let mut query_builder = QueryBuilder::new(
                 r#"
                     INSERT INTO liquidations (
                         time, symbol_id, side, price, quantity
-                    ) VALUES (?, ?, ?, ?, ?)
+                    )
                 "#,
-            )
-            .bind(order.time)
-            .bind(symbol_id)
-            .bind(order.side.clone())
-            .bind(order.price)
-            .bind(order.quantity)
-            .execute(&mut *tx)
-            .await?;
+            );
+            query_builder.push_values(chunk, |mut b, order| {
+                b.push_bind(order.time)
+                    .push_bind(&order.symbol)
+                    .push_bind(&order.side)
+                    .push_bind(order.price.0)
+                    .push_bind(order.quantity.0);
+            });
+            let query = query_builder.build();
+            query.execute(&mut *tx).await?;
         }
         tx.commit().await?;
         Ok(())
