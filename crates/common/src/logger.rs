@@ -1,7 +1,8 @@
 use tracing_subscriber::EnvFilter;
 
 pub fn setup_logger() {
-    let filter = EnvFilter::new("debug").add_directive("sqlx=warn".parse().unwrap());
+    let filter =
+        EnvFilter::new("error,warn,debug,info").add_directive("sqlx=warn".parse().unwrap());
 
     tracing_subscriber::fmt()
         // .with_file(true)
@@ -11,6 +12,6 @@ pub fn setup_logger() {
         .with_level(true)
         .with_ansi(true)
         .compact()
-        .with_env_filter(filter)
+        // .with_env_filter(filter)
         .init();
 }

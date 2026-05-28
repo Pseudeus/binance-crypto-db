@@ -1,24 +1,24 @@
-CREATE TABLE IF NOT EXISTS order_books(
+CREATE TABLE IF NOT EXISTS spot_order_books(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    time REAL NOT NULL,
+    receive_time INTEGER NOT NULL,
     symbol_id TEXT NOT NULL,
     bids BLOB NOT NULL,
     asks BLOB NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_time ON order_books(time);
-CREATE INDEX IF NOT EXISTS idx_symbol_time ON order_books(symbol_id, time);
+CREATE INDEX IF NOT EXISTS idx_symbol_receive_time ON spot_order_books(symbol_id, receive_time);
 
-CREATE TABLE IF NOT EXISTS agg_trades(
+CREATE TABLE IF NOT EXISTS spot_agg_trades(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    time REAL NOT NULL,
+    receive_time INTEGER NOT NULL,
+    exchange_time INTEGER NOT NULL,
     symbol_id TEXT NOT NULL,
     price REAL NOT NULL,
     quantity REAL NOT NULL,
     is_buyer_maker BOOLEAN NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_agg_symbol_time ON agg_trades(symbol_id, time);
+CREATE INDEX IF NOT EXISTS idx_agg_symbol_exchange_time ON spot_agg_trades(symbol_id, exchange_time);
 
-CREATE TABLE IF NOT EXISTS klines_1s(
+CREATE TABLE IF NOT EXISTS spot_klines_1m(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol_id TEXT NOT NULL,
     start_time INTEGER NOT NULL,
@@ -31,34 +31,26 @@ CREATE TABLE IF NOT EXISTS klines_1s(
     no_of_trades INTEGER NOT NULL,
     taker_buy_vol REAL NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_klines_symbol_starttime ON klines_1s(symbol_id, start_time);
+CREATE INDEX IF NOT EXISTS idx_klines_symbol_start_time ON spot_klines_1m(symbol_id, start_time);
 
--- NOT YET BEING USED
-CREATE TABLE IF NOT EXISTS funding_rates(
+CREATE TABLE IF NOT EXISTS spot_book_ticker(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    time REAL NOT NULL,
-    symbol_id TEXT NOT NULL,
-    mark_price REAL NOT NULL,
-    index_price REAL NOT NULL,
-    rate REAL NOT NULL
+    receive_time INTEGER NOT NULL,
+    symbol_id TEXT  NOT NULL,
+    best_bid_price REAL NOT NULL,
+    best_bid_qty REAL NOT NULL,
+    best_ask_price REAL NOT NULL,
+    best_ask_qty REAL NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_funding_rates_symbol_time ON funding_rates(symbol_id, time);
+CREATE INDEX IF NOT EXISTS idx_bood_ticker_symbol_receive_time ON spot_book_ticker(symbol_id, receive_time);
 
-CREATE TABLE IF NOT EXISTS open_interest(
+CREATE TABLE IF NOT EXISTS fut_liquidations(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    time REAL NOT NULL,
-    symbol_id TEXT NOT NULL,
-    oi_value REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_open_interest_symbol_time ON open_interest(symbol_id, time);
-
--- NOT YET BEING USED
-CREATE TABLE IF NOT EXISTS liquidations(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    time REAL NOT NULL,
+    receive_time INTEGER NOT NULL,
+    exchange_time INTEGER NOT NULL,
     symbol_id TEXT NOT NULL,
     side TEXT NOT NULL,
     price REAL NOT NULL,
     quantity REAL NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_liquidations_symbol_time ON liquidations(symbol_id, time);
+CREATE INDEX IF NOT EXISTS idx_liquidations_symbol_exchange_time ON fut_liquidations(symbol_id, exchange_time);

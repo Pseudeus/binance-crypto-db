@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 use tokio::{sync::mpsc, task::JoinHandle};
+use tracing::error;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -69,5 +70,14 @@ pub trait Actor: Send + Sync {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
         })
+    }
+
+    fn shutdown(&self, supervisor_tx: mpsc::Sender<ControlMessage>) {
+        let id = self.id();
+        tokio::spawn(async move {
+            if let Err(e) = supervisor_tx.send(ControlMessage::Shutdown(id)).await {
+                error!("Shutdown intent failed: {}", e);
+            }
+        });
     }
 }

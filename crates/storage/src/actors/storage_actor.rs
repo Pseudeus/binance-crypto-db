@@ -8,14 +8,12 @@ use uuid::Uuid;
 
 use crate::db::RotatingPool;
 use crate::repositories::aggtrade_repo::AggTradeWriterBuffer;
+use crate::repositories::bookticker_repo::{BookTickerRepository, BookTickerWriterBuffer};
 use crate::repositories::forceorder_repo::ForceOrderWriterBuffer;
 use crate::repositories::klines_repo::KlineWriterBuffer;
-use crate::repositories::markprice_repo::MarkPriceWriterBuffer;
-use crate::repositories::openinterest_repo::OpenInterestWriterBuffer;
 use crate::repositories::orderbook_repo::OrderBookWriterBuffer;
 use crate::repositories::{
-    AggTradeRepository, ForceOrderRepository, KlineRepository, MarkPriceRepository,
-    OpenInterestRepository, OrderBookRepository,
+    AggTradeRepository, ForceOrderRepository, KlineRepository, OrderBookRepository,
 };
 
 const BUFFER_CAPACITY: usize = 1_000;
@@ -28,9 +26,8 @@ struct StorageState {
     aggtrade_repo: AggTradeWriterBuffer,
     orderbook_repo: OrderBookWriterBuffer,
     kline_repo: KlineWriterBuffer,
-    markprice_repo: MarkPriceWriterBuffer,
+    bookticker_repo: BookTickerWriterBuffer,
     forceorder_repo: ForceOrderWriterBuffer,
-    openinterest_repo: OpenInterestWriterBuffer,
 }
 
 impl StorageState {
@@ -47,16 +44,12 @@ impl StorageState {
                 BUFFER_CAPACITY,
             ),
             kline_repo: KlineWriterBuffer::new(KlineRepository::new(pool.clone()), BUFFER_CAPACITY),
-            markprice_repo: MarkPriceWriterBuffer::new(
-                MarkPriceRepository::new(pool.clone()),
-                BUFFER_CAPACITY,
+            bookticker_repo: BookTickerWriterBuffer::new(
+                BookTickerRepository::new(pool.clone()),
+                110_000,
             ),
             forceorder_repo: ForceOrderWriterBuffer::new(
                 ForceOrderRepository::new(pool.clone()),
-                BUFFER_CAPACITY,
-            ),
-            openinterest_repo: OpenInterestWriterBuffer::new(
-                OpenInterestRepository::new(pool),
                 BUFFER_CAPACITY,
             ),
         }
@@ -75,18 +68,25 @@ impl StorageState {
             Kline((data, _is_final)) => {
                 self.kline_repo.push(data.clone()).await?;
             }
-            MarkPrice(data) => {
-                self.markprice_repo.push(data.clone()).await?;
-            }
             ForceOrder(data) => {
                 self.forceorder_repo.push(data.clone()).await?;
             }
-            OpenInterest(data) => {
-                self.openinterest_repo.push(data.clone()).await?;
+            BookTicker(data) => {
+                self.bookticker_repo.push(data.clone()).await?;
             }
             AccountUpdate(_updates) => {}
             ExecutionReport(_report) => {}
         }
+        Ok(())
+    }
+
+    async fn shutdown(&self) -> anyhow::Result<()> {
+        self.aggtrade_repo.close().await?;
+        self.orderbook_repo.close().await?;
+        self.kline_repo.close().await?;
+        self.forceorder_repo.close().await?;
+        self.bookticker_repo.close().await?;
+
         Ok(())
     }
 }

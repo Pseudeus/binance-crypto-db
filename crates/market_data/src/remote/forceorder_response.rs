@@ -1,4 +1,4 @@
-use common::models::{ForceOrderInsert, Price, Quantity};
+use common::models::{ForceOrderInsert, Price, Quantity, Symbol};
 use serde::Deserialize;
 
 use crate::traits::RemoteResponse;
@@ -15,20 +15,23 @@ pub struct ForceOrderEvent {
     pub symbol: String,
     #[serde(rename(deserialize = "S"))]
     pub side: String,
-    #[serde(rename(deserialize = "p"))]
-    pub price: String,
+    #[serde(rename(deserialize = "ap"))]
+    pub avg_price: String,
     #[serde(rename(deserialize = "q"))]
     pub quantity: String,
+    #[serde(rename(deserialize = "T"))]
+    pub exchange_time: i64,
 }
 
 impl RemoteResponse<ForceOrderInsert> for ForceOrderCombinedEvent {
     fn to_insertable(&self) -> Result<ForceOrderInsert, serde_json::Error> {
         Ok(ForceOrderInsert {
-            time: self.get_time_f64(),
-            symbol: self.data.symbol.clone(),
+            exchange_time: self.data.exchange_time,
+            receive_time: self.get_time_i64(),
+            symbol: Symbol::from(self.data.symbol.as_str()),
             side: self.data.side.clone(),
-            price: Price(self.data.price.parse::<f64>().unwrap_or(0_f64)),
-            quantity: Quantity(self.data.quantity.parse::<f64>().unwrap_or(0_f64)),
+            avg_price: Price::from(self.data.avg_price.as_str()),
+            quantity: Quantity::from(self.data.quantity.as_str()),
         })
     }
 }

@@ -1,24 +1,43 @@
 pub mod aggtrade;
+pub mod book_ticker;
 pub mod force_order;
 pub mod kline;
-pub mod markprice;
-pub mod open_interest;
 pub mod orderbook;
 pub mod signal;
 
 pub use aggtrade::{AggTrade, AggTradeInsert};
 pub use force_order::{ForceOrder, ForceOrderInsert};
 pub use kline::{Kline, KlineInsert};
-pub use markprice::{MarkPrice, MarkPriceInsert};
-pub use open_interest::{OpenInterest, OpenInterestInsert};
 pub use orderbook::{OrderBook, OrderBookInsert};
 pub use signal::TradeSignal;
 
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign, Deref, DerefMut, Div, Mul, Sub, SubAssign};
 
+use crate::models::book_ticker::BookTickerInsert;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Symbol(pub String);
+
+impl From<String> for Symbol {
+    fn from(value: String) -> Self {
+        Self(value.clone())
+    }
+}
+
+impl From<&str> for Symbol {
+    fn from(value: &str) -> Self {
+        Self(value.into())
+    }
+}
+
+impl Deref for Symbol {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 /// NewType wrapper for market prices.
 ///
@@ -28,6 +47,17 @@ pub struct Symbol(pub String);
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Price(pub f64);
 
+impl From<String> for Price {
+    fn from(value: String) -> Self {
+        Self(value.parse::<f64>().unwrap_or(0_f64))
+    }
+}
+impl From<&str> for Price {
+    fn from(value: &str) -> Self {
+        Self(value.parse::<f64>().unwrap_or(0_f64))
+    }
+}
+
 /// NewType wrapper for asset quantities.
 ///
 /// # Complexity
@@ -35,6 +65,17 @@ pub struct Price(pub f64);
 /// - **Memory Complexity**: O(1). Zero-cost abstraction over `f64`.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Quantity(pub f64);
+
+impl From<String> for Quantity {
+    fn from(value: String) -> Self {
+        Self(value.parse::<f64>().unwrap_or(0_f64))
+    }
+}
+impl From<&str> for Quantity {
+    fn from(value: &str) -> Self {
+        Self(value.parse::<f64>().unwrap_or(0_f64))
+    }
+}
 
 /// NewType wrapper for USDT (quote asset) values.
 ///
@@ -203,11 +244,10 @@ pub enum MarketEvent {
     AggTrade(AggTradeInsert),
     OrderBook(OrderBookInsert),
     Kline((KlineInsert, bool)),
-    MarkPrice(MarkPriceInsert),
     ForceOrder(ForceOrderInsert),
-    OpenInterest(OpenInterestInsert),
     AccountUpdate(Vec<AccountUpdate>),
     ExecutionReport(ExecutionReport),
+    BookTicker(BookTickerInsert),
 }
 
 #[cfg(test)]

@@ -1,9 +1,10 @@
-use crate::{db::RotatingPool, repositories::Repository, storage_write_buffer::StorageWriteBuffer};
+use crate::{
+    batch_size, db::RotatingPool, repositories::Repository,
+    storage_write_buffer::StorageWriteBuffer,
+};
 use common::models::AggTradeInsert;
 use sqlx::QueryBuilder;
 use std::sync::Arc;
-
-const BATCH_SIZE: usize = (i16::MAX / 5) as usize;
 
 pub type AggTradeWriterBuffer = StorageWriteBuffer<AggTradeInsert, AggTradeRepository>;
 
@@ -24,12 +25,14 @@ impl Repository for AggTradeRepository {
         let (pool, _) = self.pool.get_pool().await?;
         sqlx::query(
             r#"
-                INSERT INTO agg_trades (
-                    time, symbol_id, price, quantity, is_buyer_maker
+                INSERT INTO spot_agg_trades (
+                    receive_time, exchange_time, symbol_id,
+                    price, quantity, is_buyer_maker
                 ) VALUES (?, ?, ?, ?, ?)
             "#,
         )
-        .bind(trade.time)
+        .bind(trade.receive_time)
+        .bind(trade.exchange_time)
         .bind(&trade.symbol.0)
         .bind(trade.price.0)
         .bind(trade.quantity.0)
@@ -46,16 +49,19 @@ impl Repository for AggTradeRepository {
         let (pool, _) = self.pool.get_pool().await?;
         let mut tx = pool.begin().await?;
 
+        batch_size!(6);
         for chunks in trades.chunks(BATCH_SIZE) {
             let mut query_builder = QueryBuilder::new(
                 r#"
-                    INSERT INTO agg_trades (
-                        time, symbol_id, price, quantity, is_buyer_maker
+                    INSERT INTO spot_agg_trades (
+                        receive_time, exchange_time, symbol_id,
+                        price, quantity, is_buyer_maker
                     )
                 "#,
             );
             query_builder.push_values(chunks, |mut b, entry| {
-                b.push_bind(entry.time)
+                b.push_bind(entry.receive_time)
+                    .push_bind(entry.exchange_time)
                     .push_bind(&entry.symbol.0)
                     .push_bind(entry.price.0)
                     .push_bind(entry.quantity.0)

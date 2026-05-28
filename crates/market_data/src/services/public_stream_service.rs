@@ -8,9 +8,10 @@ use futures_util::future::BoxFuture;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use crate::remote::book_ticker_response::BookTickerEvent;
 use crate::remote::{
     AggTradeCombinedEvent, AggTradeEvent, DepthPayload, KlineDataCombinedEvent,
     OrderBookCombinedEvent, get_ws_base_url,
@@ -21,8 +22,8 @@ use crate::traits::RemoteResponse;
 ///
 /// Ingests:
 /// - aggTrade
-/// - depth5
-/// - kline_1s
+/// - depth20
+/// - kline_1m
 ///
 /// # Complexity
 /// - **Time Complexity**: O(N) where N is the number of streams subscribed to. Parsing is O(1) per message.
@@ -62,7 +63,10 @@ impl PublicStreamActor {
                 }
                 .to_insertable()?,
             ));
-        } else if raw_event.stream.ends_with("@depth5") {
+        } else if raw_event.stream.ends_with("@bookTicker") {
+            let specific_data = serde_json::from_value::<BookTickerEvent>(raw_event.data)?;
+            return Ok(MarketEvent::BookTicker(specific_data.to_insertable()?));
+        } else if raw_event.stream.ends_with("@depth20") {
             let specific_data = serde_json::from_value::<DepthPayload>(raw_event.data)?;
             return Ok(MarketEvent::OrderBook(
                 OrderBookCombinedEvent {
@@ -71,7 +75,7 @@ impl PublicStreamActor {
                 }
                 .to_insertable()?,
             ));
-        } else if raw_event.stream.contains("@kline") {
+        } else if raw_event.stream.ends_with("@kline_1m") {
             let specific_data = serde_json::from_value::<KlineDataCombinedEvent>(raw_event.data)?;
             return Ok(MarketEvent::Kline(specific_data.to_insertable()?));
         } else {
@@ -100,7 +104,7 @@ impl Actor for PublicStreamActor {
             .iter()
             .map(|s| {
                 format!(
-                    "{sl}@aggTrade/{sl}@depth5/{sl}@kline_1s",
+                    "{sl}@aggTrade/{sl}@depth20/{sl}@kline_1m/{sl}@bookTicker",
                     sl = s.to_lowercase()
                 )
             })
@@ -147,6 +151,7 @@ impl Actor for PublicStreamActor {
                             "PublicStreamActor connection failed: {}. Retrying in 5s...",
                             e
                         );
+                        //TODO: send a message to notify via telegram
                         time::sleep(Duration::from_secs(5)).await;
                     }
                 }

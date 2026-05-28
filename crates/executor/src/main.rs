@@ -1,8 +1,12 @@
+use anyhow::Context;
 use dotenvy::dotenv;
 use std::{env, sync::Arc};
 use storage::db::RotatingPool;
+use tokio::signal;
 use tokio::sync::broadcast;
 use tracing::debug;
+
+use tokio::signal::unix::{Signal, SignalKind, signal};
 
 use common::actors::ActorType;
 use common::logger;
@@ -20,12 +24,56 @@ const SYMBOLS: &[&str; 15] = &[
     // Core (7)
     "btcusdt", "ethusdt", "bnbusdt", "solusdt", "avaxusdt", "nearusdt", "polusdt",
     // Alpha (5)
-    "dogeusdt", "shibusdt", "pepeusdt", "wifiusdt", "bonkusdt", // Macro (3)
+    "dogeusdt", "shibusdt", "pepeusdt", "wifusdt", "bonkusdt", // Macro (3)
     "xrpusdt", "adausdt", "dotusdt",
 ];
 
+macro_rules! regist_actor {
+    ($supervisor:ident, $market_tx:ident, $actor:ident) => {
+        let tx_for_public = $market_tx.clone();
+        $supervisor.register_actor(
+            ActorType::$actor,
+            Box::new(move || Box::new($actor::new(SYMBOLS, tx_for_public.clone()))),
+        );
+    };
+    ($supervisor:ident, $market_tx:ident, $pool_mgr:ident, $actor:ident) => {
+        let dm_for_storage = $pool_mgr.clone();
+        let rx_for_storage = $market_tx.subscribe();
+        $supervisor.register_actor(
+            ActorType::$actor,
+            Box::new(move || {
+                Box::new($actor::new(
+                    dm_for_storage.clone(),
+                    rx_for_storage.resubscribe(),
+                ))
+            }),
+        );
+    };
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // let ctrl_c = async {
+    //     signal::ctrl_c()
+    //         .await
+    //         .context("Failed to install SIGINT handler")
+    // };
+    // let terminate = async {
+    //     signal(SignalKind::terminate())
+    //         .expect("Failed to install SIGTERM handler")
+    //         .recv()
+    //         .await
+    // };
+
+    // tokio::select! {
+    //     _ = ctrl_c => {
+    //         println!("\n[Signal] Received SIGINT (Ctrl+C)");
+    //     },
+    //     _ = terminate => {
+    //         println!("\n[Signal] Received SIGTERM");
+    //     }
+    // }
+
     logger::setup_logger();
     dotenv().ok();
     debug!("System starting up...");
@@ -39,11 +87,7 @@ async fn main() -> anyhow::Result<()> {
     let (market_tx, _) = broadcast::channel::<Arc<common::models::MarketEvent>>(10_000);
 
     // --- Specialized Ingestion Actors ---
-    let tx_for_public = market_tx.clone();
-    supervisor.register_actor(
-        ActorType::PublicStreamActor,
-        Box::new(move || Box::new(PublicStreamActor::new(SYMBOLS, tx_for_public.clone()))),
-    );
+    regist_actor!(supervisor, market_tx, PublicStreamActor);
 
     // let tx_for_user = market_tx.clone();
     // supervisor.register_actor(
@@ -51,24 +95,10 @@ async fn main() -> anyhow::Result<()> {
     //     Box::new(move || Box::new(UserStreamActor::new(tx_for_user.clone()))),
     // );
 
-    let tx_for_futures = market_tx.clone();
-    supervisor.register_actor(
-        ActorType::FuturesStreamActor,
-        Box::new(move || Box::new(FuturesStreamActor::new(SYMBOLS, tx_for_futures.clone()))),
-    );
+    regist_actor!(supervisor, market_tx, FuturesStreamActor);
 
     // --- Centralized Storage Actor ---
-    let dm_for_storage = data_manager.clone();
-    let rx_for_storage = market_tx.subscribe();
-    supervisor.register_actor(
-        ActorType::StorageActor,
-        Box::new(move || {
-            Box::new(StorageActor::new(
-                dm_for_storage.clone(),
-                rx_for_storage.resubscribe(),
-            ))
-        }),
-    );
+    regist_actor!(supervisor, market_tx, data_manager, StorageActor);
 
     // AI/Strategy & Execution Setup
     // let (exec_tx, _) = broadcast::channel::<common::models::TradeSignal>(100);

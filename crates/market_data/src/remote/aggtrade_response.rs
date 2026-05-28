@@ -1,6 +1,5 @@
-use serde::Deserialize;
-
 use common::models::{AggTradeInsert, Price, Quantity, Symbol};
+use serde::Deserialize;
 
 use crate::traits::RemoteResponse;
 
@@ -19,15 +18,18 @@ pub struct AggTradeEvent {
     pub quantity: String,
     #[serde(rename(deserialize = "m"))]
     pub is_buyer_maker: bool,
+    #[serde(rename(deserialize = "T"))]
+    pub exchange_time: i64,
 }
 
 impl RemoteResponse<AggTradeInsert> for AggTradeCombinedEvent {
     fn to_insertable(&self) -> Result<AggTradeInsert, serde_json::Error> {
         Ok(AggTradeInsert {
-            time: self.get_time_f64(),
-            symbol: Symbol(self.data.symbol.clone()),
-            price: Price(self.data.price.parse::<f64>().unwrap_or(0_f64)),
-            quantity: Quantity(self.data.quantity.parse::<f64>().unwrap_or(0_f64)),
+            receive_time: self.get_time_i64(),
+            exchange_time: self.data.exchange_time,
+            symbol: Symbol::from(self.data.symbol.as_str()),
+            price: Price::from(self.data.price.as_str()),
+            quantity: Quantity::from(self.data.quantity.as_str()),
             is_buyer_maker: self.data.is_buyer_maker,
         })
     }

@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use common::models::KlineInsert;
+use common::models::{KlineInsert, Price, Symbol};
 
 use crate::traits::RemoteResponse;
 
@@ -15,9 +15,9 @@ pub struct KlineEvent {
     #[serde(rename(deserialize = "s"))]
     pub symbol: String,
     #[serde(rename(deserialize = "t"))]
-    pub start_time: u64,
+    pub start_time: i64,
     #[serde(rename(deserialize = "T"))]
-    pub close_time: u64,
+    pub close_time: i64,
     #[serde(rename(deserialize = "o"))]
     pub open_price: String,
     #[serde(rename(deserialize = "c"))]
@@ -40,16 +40,16 @@ impl RemoteResponse<(KlineInsert, bool)> for KlineDataCombinedEvent {
     fn to_insertable(&self) -> Result<(KlineInsert, bool), serde_json::Error> {
         Ok((
             KlineInsert {
-                symbol: self.data.symbol.clone(),
-                start_time: self.data.start_time as i32,
-                close_time: self.data.close_time as i32,
-                open_price: self.data.open_price.parse::<f32>().unwrap_or(0_f32),
-                close_price: self.data.close_price.parse::<f32>().unwrap_or(0_f32),
-                high_price: self.data.high_price.parse::<f32>().unwrap_or(0_f32),
-                low_price: self.data.low_price.parse::<f32>().unwrap_or(0_f32),
+                symbol: Symbol::from(self.data.symbol.as_str()),
+                start_time: self.data.start_time,
+                close_time: self.data.close_time,
+                open_price: Price::from(self.data.open_price.as_str()),
+                close_price: Price::from(self.data.close_price.as_str()),
+                high_price: Price::from(self.data.high_price.as_str()),
+                low_price: Price::from(self.data.low_price.as_str()),
                 volume: self.data.volume.parse::<f64>().unwrap_or(0_f64),
                 no_of_trades: self.data.no_of_trades as i32,
-                taker_buy_vol: self.data.taker_buy_vol.parse::<f32>().unwrap_or(0_f32),
+                taker_buy_vol: self.data.taker_buy_vol.parse::<f64>().unwrap_or(0_f64),
             },
             self.data.is_closed,
         ))

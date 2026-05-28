@@ -11,16 +11,12 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::remote::{
-    forceorder_response::ForceOrderCombinedEvent, get_futures_ws_base_url,
-    markprice_response::MarkPriceEvent,
-};
+use crate::remote::{forceorder_response::ForceOrderCombinedEvent, get_futures_ws_base_url};
 use crate::traits::RemoteResponse;
 
 /// Actor responsible for ingesting futures-specific market data from Binance.
 ///
 /// Ingests:
-/// - markPrice@1s
 /// - forceOrder
 ///
 /// # Complexity
@@ -53,10 +49,7 @@ impl FuturesStreamActor {
 
         let raw_event: RawStreamEvent = serde_json::from_str(json_input)?;
 
-        if raw_event.stream.ends_with("@markPrice@1s") {
-            let specific_data = serde_json::from_value::<MarkPriceEvent>(raw_event.data)?;
-            return Ok(MarketEvent::MarkPrice(specific_data.to_insertable()?));
-        } else if raw_event.stream.ends_with("@forceOrder") {
+        if raw_event.stream.ends_with("@forceOrder") {
             let specific_data = serde_json::from_value::<ForceOrderCombinedEvent>(raw_event.data)?;
             return Ok(MarketEvent::ForceOrder(specific_data.to_insertable()?));
         } else {
@@ -83,7 +76,7 @@ impl Actor for FuturesStreamActor {
         let fstreams: Vec<String> = self
             .symbols
             .iter()
-            .map(|s| format!("{sl}@forceOrder/{sl}@markPrice@1s", sl = s.to_lowercase()))
+            .map(|s| format!("{sl}@forceOrder", sl = s.to_lowercase()))
             .collect();
 
         let furl = format!("{}{}", get_futures_ws_base_url(), fstreams.join("/"));

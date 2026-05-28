@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use common::models::OrderBookInsert;
+use common::models::{OrderBookInsert, Symbol};
 
 use crate::traits::RemoteResponse;
 
@@ -26,8 +26,8 @@ impl RemoteResponse<OrderBookInsert> for OrderBookCombinedEvent {
             .to_uppercase();
 
         Ok(OrderBookInsert {
-            time: self.get_time_f64(),
-            symbol: symbol_upper.to_string(),
+            receive_time: self.get_time_i64(),
+            symbol: Symbol::from(symbol_upper.as_str()),
             bids: Self::pack_level(&self.data.bids),
             asks: Self::pack_level(&self.data.asks),
         })

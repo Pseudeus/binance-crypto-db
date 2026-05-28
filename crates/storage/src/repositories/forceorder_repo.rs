@@ -2,9 +2,10 @@ use common::models::ForceOrderInsert;
 use sqlx::QueryBuilder;
 use std::sync::Arc;
 
-use crate::{db::RotatingPool, repositories::Repository, storage_write_buffer::StorageWriteBuffer};
-
-const BATCH_SIZE: usize = (i16::MAX / 5) as usize;
+use crate::{
+    batch_size, db::RotatingPool, repositories::Repository,
+    storage_write_buffer::StorageWriteBuffer,
+};
 
 pub type ForceOrderWriterBuffer = StorageWriteBuffer<ForceOrderInsert, ForceOrderRepository>;
 
@@ -21,46 +22,51 @@ impl ForceOrderRepository {
 impl Repository for ForceOrderRepository {
     type Input = ForceOrderInsert;
 
-    async fn insert(&self, order: &Self::Input) -> Result<(), sqlx::Error> {
+    async fn insert(&self, liquidation: &Self::Input) -> Result<(), sqlx::Error> {
         let (pool, _) = self.pool.get_pool().await?;
         sqlx::query(
             r#"
-                INSERT INTO liquidations (
-                    time, symbol_id, side, price, quantity
-                ) VALUES (?, ?, ?, ?, ?)
+                INSERT INTO fut_liquidations (
+                    receive_time, exchange_time, symbol_id,
+                    side, price, quantity
+                ) VALUES (?, ?, ?, ?, ?, ?)
             "#,
         )
-        .bind(order.time)
-        .bind(&order.symbol)
-        .bind(order.side.clone())
-        .bind(order.price.0)
-        .bind(order.quantity.0)
+        .bind(liquidation.receive_time)
+        .bind(liquidation.exchange_time)
+        .bind(&liquidation.symbol.0)
+        .bind(&liquidation.side)
+        .bind(liquidation.avg_price.0)
+        .bind(liquidation.quantity.0)
         .execute(&pool)
         .await?;
         Ok(())
     }
 
-    async fn insert_batch(&self, orders: &[Self::Input]) -> Result<(), sqlx::Error> {
-        if orders.is_empty() {
+    async fn insert_batch(&self, liquidations: &[Self::Input]) -> Result<(), sqlx::Error> {
+        if liquidations.is_empty() {
             return Ok(());
         }
         let (pool, _) = self.pool.get_pool().await?;
         let mut tx = pool.begin().await?;
 
-        for chunk in orders.chunks(BATCH_SIZE) {
+        batch_size!(6);
+        for chunk in liquidations.chunks(BATCH_SIZE) {
             let mut query_builder = QueryBuilder::new(
                 r#"
-                    INSERT INTO liquidations (
-                        time, symbol_id, side, price, quantity
+                    INSERT INTO fut_liquidations (
+                        receive_time, exchange_time, symbol_id,
+                        side, price, quantity
                     )
                 "#,
             );
-            query_builder.push_values(chunk, |mut b, order| {
-                b.push_bind(order.time)
-                    .push_bind(&order.symbol)
-                    .push_bind(&order.side)
-                    .push_bind(order.price.0)
-                    .push_bind(order.quantity.0);
+            query_builder.push_values(chunk, |mut b, liquidation| {
+                b.push_bind(liquidation.receive_time)
+                    .push_bind(liquidation.exchange_time)
+                    .push_bind(&liquidation.symbol.0)
+                    .push_bind(&liquidation.side)
+                    .push_bind(liquidation.avg_price.0)
+                    .push_bind(liquidation.quantity.0);
             });
             let query = query_builder.build();
             query.execute(&mut *tx).await?;

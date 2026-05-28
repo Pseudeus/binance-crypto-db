@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 #[allow(dead_code)]
 pub struct AggTrade {
     pub id: i32,
-    pub time: f64,
+    pub receive_time: i64,
+    pub exchange_time: i64,
     pub symbol_id: Symbol,
     pub price: Price,
     pub quantity: Quantity,
@@ -14,7 +15,8 @@ pub struct AggTrade {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AggTradeInsert {
-    pub time: f64,
+    pub receive_time: i64,
+    pub exchange_time: i64,
     pub symbol: Symbol,
     pub price: Price,
     pub quantity: Quantity,
