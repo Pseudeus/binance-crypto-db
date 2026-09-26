@@ -1,7 +1,11 @@
 [package]
 name = "common"
-version = "0.1.0"
-edition = "2024"
+description = "Core domain models, actor abstractions, and structured logging"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
 
 [dependencies]
 chrono = { workspace = true }

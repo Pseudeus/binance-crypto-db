@@ -1,10 +1,15 @@
 [package]
 name = "storage"
-version = "0.1.0"
-edition = "2024"
+description = "High-throughput SQLite persistence layer and memory write buffer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
 
 [dependencies]
-common = { path = "../common" }
+common = { workspace = true }
+
 chrono = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }

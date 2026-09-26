@@ -1,11 +1,16 @@
 [package]
 name = "strategy"
-version = "0.1.0"
-edition = "2024"
+description = "Microstructure feature extraction, risk management, and ONNX edge inference"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
 
 [dependencies]
-common = { path = "../common" }
-market_data = { path = "../market_data" }
+common = { workspace = true }
+market_data = { workspace = true }
+
 tract-onnx = { workspace = true }
 ndarray = { workspace = true }
 ta = { workspace = true }

@@ -1,0 +1,5 @@
+# Configuration for RISC-V cross-compilation (Orange Pi RV2 target)
+[target.riscv64gc-unknown-linux-gnu]
+rustflags = [
+    "-C", "target-feature=+m,+a,+f,+d,+c",
+]
