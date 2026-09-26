@@ -1,11 +1,16 @@
 [package]
 name = "market_data"
-version = "0.1.0"
-edition = "2024"
+description = "Real-time Binance WebSocket and REST market data ingestion service"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
 
 [dependencies]
-common = { path = "../common" }
-storage = { path = "../storage" }
+common = { workspace = true }
+storage = { workspace = true }
+
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 reqwest = { workspace = true }

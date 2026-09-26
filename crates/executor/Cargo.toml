@@ -1,17 +1,22 @@
 [package]
 name = "executor"
-version = "0.1.0"
-edition = "2024"
+description = "High-frequency execution daemon and actor supervisor for binance-crypto-db"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "bot"
 path = "src/main.rs"
 
 [dependencies]
-common = { path = "../common" }
-market_data = { path = "../market_data" }
-storage = { path = "../storage" }
-strategy = { path = "../strategy" }
+common = { workspace = true }
+market_data = { workspace = true }
+storage = { workspace = true }
+strategy = { workspace = true }
+
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
