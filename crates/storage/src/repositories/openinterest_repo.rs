@@ -1,68 +1,38 @@
+use crate::repositories::Repository;
 use common::models::OpenInterestInsert;
-use sqlx::QueryBuilder;
-use std::sync::Arc;
+use rusqlite::{params, Connection, Result, Transaction};
 
-use crate::{db::RotatingPool, repositories::Repository, storage_write_buffer::StorageWriteBuffer};
-
-const BATCH_SIZE: usize = (i16::MAX / 3) as usize;
-
-pub type OpenInterestWriterBuffer = StorageWriteBuffer<OpenInterestInsert, OpenInterestRepository>;
-
-pub struct OpenInterestRepository {
-    pool: Arc<RotatingPool>,
-}
-
-impl OpenInterestRepository {
-    pub fn new(pool: Arc<RotatingPool>) -> Self {
-        Self { pool: pool.clone() }
-    }
-}
+pub struct OpenInterestRepository;
 
 impl Repository for OpenInterestRepository {
     type Input = OpenInterestInsert;
 
-    async fn insert(&self, interest: &Self::Input) -> Result<(), sqlx::Error> {
-        let (pool, _) = self.pool.get_pool().await?;
-        sqlx::query(
+    fn insert(conn: &Connection, interest: &Self::Input) -> Result<()> {
+        conn.execute(
             r#"
                 INSERT INTO open_interest (
                     time, symbol_id, oi_value
                 ) VALUES (?, ?, ?)
             "#,
-        )
-        .bind(interest.time)
-        .bind(&interest.symbol)
-        .bind(interest.oi_value)
-        .execute(&pool)
-        .await?;
+            params![interest.time, interest.symbol, interest.oi_value],
+        )?;
         Ok(())
     }
 
-    async fn insert_batch(&self, interests: &[Self::Input]) -> Result<(), sqlx::Error> {
+    fn insert_batch(tx: &Transaction, interests: &[Self::Input]) -> Result<()> {
         if interests.is_empty() {
             return Ok(());
         }
-
-        let (pool, _) = self.pool.get_pool().await?;
-        let mut tx = pool.begin().await?;
-
-        for chunk in interests.chunks(BATCH_SIZE) {
-            let mut query_builder = QueryBuilder::new(
-                r#"
-                    INSERT INTO open_interest (
-                        time, symbol_id, oi_value
-                    )
-                "#,
-            );
-            query_builder.push_values(chunk, |mut b, interest| {
-                b.push_bind(interest.time)
-                    .push_bind(&interest.symbol)
-                    .push_bind(interest.oi_value);
-            });
-            let query = query_builder.build();
-            query.execute(&mut *tx).await?;
+        let mut stmt = tx.prepare_cached(
+            r#"
+                INSERT INTO open_interest (
+                    time, symbol_id, oi_value
+                ) VALUES (?, ?, ?)
+            "#,
+        )?;
+        for interest in interests {
+            stmt.execute(params![interest.time, interest.symbol, interest.oi_value])?;
         }
-        tx.commit().await?;
         Ok(())
     }
 }

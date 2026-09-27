@@ -1,104 +1,159 @@
 use chrono::{DateTime, Datelike, Duration, Utc};
 use common::actors::ControlMessage;
-use sqlx::sqlite::{self, SqliteConnectOptions, SqlitePool};
-use std::str::FromStr;
-use std::time::Duration as StdDuration;
-use tokio::sync::{RwLock, mpsc};
+use common::models::{
+    AggTradeInsert, ForceOrderInsert, KlineInsert, MarkPriceInsert, OpenInterestInsert,
+    OrderBookInsert,
+};
+use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::actors::backup_actor::BackupOneShotActor;
+use crate::repositories::{
+    AggTradeRepository, ForceOrderRepository, KlineRepository, MarkPriceRepository,
+    OpenInterestRepository, OrderBookRepository, Repository,
+};
 
-pub struct RotatingPool {
-    data_folder: String,
-    inner: RwLock<(u32, SqlitePool)>,
-    supervisor_tx: mpsc::Sender<ControlMessage>,
+#[derive(Debug)]
+pub enum DbWriteBatch {
+    AggTrade(Vec<AggTradeInsert>),
+    OrderBook(Vec<OrderBookInsert>),
+    Kline(Vec<KlineInsert>),
+    MarkPrice(Vec<MarkPriceInsert>),
+    OpenInterest(Vec<OpenInterestInsert>),
+    ForceOrder(Vec<ForceOrderInsert>),
 }
 
-impl RotatingPool {
-    pub async fn new(
+#[derive(Clone)]
+pub struct DbWriterHandle {
+    tx: mpsc::Sender<DbWriteBatch>,
+}
+
+impl DbWriterHandle {
+    pub fn spawn(
         data_folder: String,
         supervisor_tx: mpsc::Sender<ControlMessage>,
-    ) -> Result<Self, sqlx::Error> {
-        let pool = get_weekly_pool(&data_folder).await?;
-        let packed = Self::current_packed();
-        Ok(Self {
-            data_folder,
-            inner: RwLock::new((packed, pool)),
-            supervisor_tx,
-        })
+    ) -> std::io::Result<Self> {
+        let (tx, rx) = mpsc::channel(256);
+        std::thread::Builder::new()
+            .name("db-writer".to_string())
+            .spawn(move || {
+                run_db_writer(data_folder, supervisor_tx, rx);
+            })?;
+        Ok(Self { tx })
     }
 
-    fn current_packed() -> u32 {
-        let (year, week) = get_date_components(Utc::now());
-        (year as u32) << 6 | (week & 0x3f)
-    }
-
-    /// Retrieves the current active SQLite connection pool, rotating the database file if necessary.
-    ///
-    /// This method implements a "Weekly Rotation" strategy:
-    /// 1. Checks if the current ISO week has changed since the last pool was created.
-    /// 2. If valid, returns the existing pool (Read Lock).
-    /// 3. If outdated, acquires a Write Lock to create a new database file (e.g., `crypto_2026_01.db`).
-    /// 4. Triggers a `BackupOneShotActor` via the Supervisor to archive the previous week's database.
-    ///
-    /// # Returns
-    /// A tuple `(SqlitePool, bool)`:
-    /// - `SqlitePool`: The active connection pool.
-    /// - `bool`: `true` if a rotation occurred (a new pool was created), `false` otherwise.
-    pub async fn get_pool(&self) -> Result<(SqlitePool, bool), sqlx::Error> {
-        let read = self.inner.read().await;
-        let (current_packed, ref pool) = *read;
-
-        if current_packed == Self::current_packed() {
-            return Ok((pool.clone(), false));
-        }
-        drop(read);
-
-        let mut write = self.inner.write().await;
-        let (current_packed, _) = *write;
-
-        if current_packed != Self::current_packed() {
-            let new_pool = get_weekly_pool(&self.data_folder).await?;
-            *write = (Self::current_packed(), new_pool);
-
-            // Spawn the backup actor via the Supervisor
-            let backup_actor = Box::new(BackupOneShotActor::new());
-            let spawn_msg = ControlMessage::Spawn(backup_actor);
-
-            if let Err(e) = self.supervisor_tx.try_send(spawn_msg) {
-                error!("Failed to request Backup Actor spawn: {}", e);
-            } else {
-                info!("Requested Backup Actor spawn via Supervisor");
-            }
-        }
-        Ok((write.1.clone(), true))
+    pub fn sender(&self) -> mpsc::Sender<DbWriteBatch> {
+        self.tx.clone()
     }
 }
 
-async fn get_weekly_pool(data_folder: &str) -> Result<SqlitePool, sqlx::Error> {
+pub fn run_db_writer(
+    data_folder: String,
+    supervisor_tx: mpsc::Sender<ControlMessage>,
+    mut rx: mpsc::Receiver<DbWriteBatch>,
+) {
+    info!("Starting dedicated DbWriter worker thread...");
+    let (mut conn, mut active_packed) = match open_connection(&data_folder) {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Fatal error initializing SQLite connection: {}", e);
+            return;
+        }
+    };
+
+    while let Some(batch) = rx.blocking_recv() {
+        let current_packed = current_packed();
+        if current_packed != active_packed {
+            info!("Rotating database file to new ISO week...");
+            drop(conn);
+            match open_connection(&data_folder) {
+                Ok((new_conn, new_packed)) => {
+                    conn = new_conn;
+                    active_packed = new_packed;
+
+                    let backup_actor = Box::new(BackupOneShotActor::new());
+                    if let Err(e) = supervisor_tx.try_send(ControlMessage::Spawn(backup_actor)) {
+                        error!("Failed to request Backup Actor spawn: {}", e);
+                    } else {
+                        info!("Requested Backup Actor spawn via Supervisor");
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to rotate database connection: {}", e);
+                    return;
+                }
+            }
+        }
+
+        if let Err(e) = write_batch(&mut conn, batch) {
+            error!("Failed to write batch to SQLite: {}", e);
+        }
+    }
+    info!("DbWriter worker channel closed, worker thread exiting cleanly.");
+}
+
+pub fn open_connection(data_folder: &str) -> anyhow::Result<(rusqlite::Connection, u32)> {
     let current_db_path = format!("{}/sqlitedata/current", data_folder);
-    tokio::fs::create_dir_all(&current_db_path)
-        .await
-        .map_err(|e| sqlx::Error::Io(e))?;
+    std::fs::create_dir_all(&current_db_path)?;
 
     let (year, week) = get_date_components(Utc::now());
     let db_filename = format!("{}/crypto_{}_{:02}.db", current_db_path, year, week);
 
-    let options = SqliteConnectOptions::from_str(&format!("sqlite:{}", db_filename))?
-        .create_if_missing(true)
-        .journal_mode(sqlite::SqliteJournalMode::Wal)
-        .synchronous(sqlite::SqliteSynchronous::Normal)
-        .busy_timeout(StdDuration::from_secs(30))
-        .statement_cache_capacity(100)
-        .auto_vacuum(sqlite::SqliteAutoVacuum::Incremental)
-        .analysis_limit(Some(400))
-        .command_buffer_size(5000);
+    let conn = rusqlite::Connection::open(&db_filename)?;
 
-    let pool = SqlitePool::connect_with(options).await?;
-    // sqlx::migrate!().run(&pool).await?;
+    // Bare-metal PRAGMA optimizations for high-throughput write performance
+    conn.execute_batch(
+        r#"
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = OFF;
+        PRAGMA cache_size = -64000;
+        PRAGMA mmap_size = 1073741824;
+        PRAGMA temp_store = MEMORY;
+        PRAGMA locking_mode = EXCLUSIVE;
+        PRAGMA wal_autocheckpoint = 10000;
+        "#,
+    )?;
+
     let schema = include_str!("../migrations/schema.sql");
-    sqlx::query(schema).execute(&pool).await?;
-    Ok(pool)
+    conn.execute_batch(schema)?;
+
+    let packed = pack_year_week(year, week);
+    Ok((conn, packed))
+}
+
+fn write_batch(conn: &mut rusqlite::Connection, batch: DbWriteBatch) -> rusqlite::Result<()> {
+    let tx = conn.transaction()?;
+    match batch {
+        DbWriteBatch::AggTrade(trades) => {
+            AggTradeRepository::insert_batch(&tx, &trades)?;
+        }
+        DbWriteBatch::OrderBook(books) => {
+            OrderBookRepository::insert_batch(&tx, &books)?;
+        }
+        DbWriteBatch::Kline(klines) => {
+            KlineRepository::insert_batch(&tx, &klines)?;
+        }
+        DbWriteBatch::MarkPrice(prices) => {
+            MarkPriceRepository::insert_batch(&tx, &prices)?;
+        }
+        DbWriteBatch::OpenInterest(interests) => {
+            OpenInterestRepository::insert_batch(&tx, &interests)?;
+        }
+        DbWriteBatch::ForceOrder(orders) => {
+            ForceOrderRepository::insert_batch(&tx, &orders)?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn pack_year_week(year: i32, week: u32) -> u32 {
+    (year as u32) << 6 | (week & 0x3f)
+}
+
+pub fn current_packed() -> u32 {
+    let (year, week) = get_date_components(Utc::now());
+    pack_year_week(year, week)
 }
 
 pub fn get_date_components(date: DateTime<Utc>) -> (i32, u32) {
@@ -106,8 +161,6 @@ pub fn get_date_components(date: DateTime<Utc>) -> (i32, u32) {
     (iso.year(), iso.week())
 }
 
-/// Calculates the ISO year and week of the week prior to the given date.
-/// Uses time subtraction to correctly handle 52/53 week years.
 pub fn get_previous_iso_week_components(date: DateTime<Utc>) -> (i32, u32) {
     let prev = date - Duration::weeks(1);
     get_date_components(prev)
@@ -129,22 +182,34 @@ mod tests {
 
     #[test]
     fn test_previous_week_calculation_fix() {
-        // Simulate being in ISO Week 1 of 2026 (e.g., Dec 29, 2025)
-        // Dec 29, 2025 is Monday. 12:00:00 UTC.
         let dt = Utc.with_ymd_and_hms(2025, 12, 29, 12, 0, 0).unwrap();
-
-        // Verify current is Week 1
         let (cur_year, cur_week) = get_date_components(dt);
         assert_eq!(cur_year, 2026);
         assert_eq!(cur_week, 1);
 
-        // Calculate previous week
         let (prev_year, prev_week) = get_previous_iso_week_components(dt);
-
-        // EXPECTED CORRECT BEHAVIOR:
-        // 1 week before Dec 29 is Dec 22.
-        // Dec 22, 2025 is in 2025-W52.
         assert_eq!(prev_year, 2025, "Expected previous year to be 2025");
         assert_eq!(prev_week, 52, "Expected previous week to be 52");
+    }
+
+    #[test]
+    fn test_open_connection_pragmas_and_schema() {
+        let temp_dir = std::env::temp_dir().join(format!("rusqlite_test_{}", std::process::id()));
+        let temp_path = temp_dir.to_str().unwrap();
+
+        let (conn, packed) = open_connection(temp_path).expect("Failed to open connection");
+        assert!(packed > 0);
+
+        let journal_mode: String = conn
+            .query_row("PRAGMA journal_mode;", [], |row| row.get(0))
+            .expect("Failed to query journal_mode");
+        assert_eq!(journal_mode.to_lowercase(), "wal");
+
+        let sync_mode: i32 = conn
+            .query_row("PRAGMA synchronous;", [], |row| row.get(0))
+            .expect("Failed to query synchronous");
+        assert_eq!(sync_mode, 0); // 0 = OFF
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

@@ -1,6 +1,6 @@
 use dotenvy::dotenv;
 use std::{env, sync::Arc};
-use storage::db::RotatingPool;
+use storage::db::DbWriterHandle;
 use tokio::sync::broadcast;
 use tracing::debug;
 
@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let supervisor_tx = supervisor.sender();
 
     let data_folder = env::var("WORKDIR")?;
-    let data_manager = Arc::new(RotatingPool::new(data_folder, supervisor_tx).await?);
+    let db_writer = DbWriterHandle::spawn(data_folder, supervisor_tx)?;
 
     let (market_tx, _) = broadcast::channel::<Arc<common::models::MarketEvent>>(10_000);
 
@@ -58,13 +58,13 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // --- Centralized Storage Actor ---
-    let dm_for_storage = data_manager.clone();
+    let db_sender = db_writer.sender();
     let rx_for_storage = market_tx.subscribe();
     supervisor.register_actor(
         ActorType::StorageActor,
         Box::new(move || {
             Box::new(StorageActor::new(
-                dm_for_storage.clone(),
+                db_sender.clone(),
                 rx_for_storage.resubscribe(),
             ))
         }),

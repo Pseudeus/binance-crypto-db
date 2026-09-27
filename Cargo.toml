@@ -34,7 +34,7 @@ tracing = "0.1.43"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 tokio = { version = "1.48.0", features = ["full"] }
 anyhow = "1.0.100"
-sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio", "chrono", "rust_decimal"] }
+rusqlite = { version = "0.33", features = ["bundled", "chrono"] }
 reqwest = { version = "0.12", features = ["json"] }
 futures-util = "0.3.31"
 tokio-tungstenite = { version = "0.28.0", features = ["native-tls-vendored"] }
@@ -48,7 +48,6 @@ hex = "0.4.3"
 url = "2.5.0"
 dotenvy = "0.15.7"
 teloxide = { version = "0.13", features = ["macros"] }
-libsqlite3-sys = { version = "^0.30.1", features = ["bundled"] }
 uuid = { version = "1.19.0", features = ["v4"] }
 toml = { version = "1.1.2" }
 

@@ -11,10 +11,9 @@ license.workspace = true
 common = { workspace = true }
 
 chrono = { workspace = true }
-sqlx = { workspace = true }
+rusqlite = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-libsqlite3-sys = { workspace = true }
 uuid = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }

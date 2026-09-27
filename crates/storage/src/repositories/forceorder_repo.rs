@@ -1,71 +1,50 @@
+use crate::repositories::Repository;
 use common::models::ForceOrderInsert;
-use sqlx::QueryBuilder;
-use std::sync::Arc;
+use rusqlite::{params, Connection, Result, Transaction};
 
-use crate::{db::RotatingPool, repositories::Repository, storage_write_buffer::StorageWriteBuffer};
-
-const BATCH_SIZE: usize = (i16::MAX / 5) as usize;
-
-pub type ForceOrderWriterBuffer = StorageWriteBuffer<ForceOrderInsert, ForceOrderRepository>;
-
-pub struct ForceOrderRepository {
-    pool: Arc<RotatingPool>,
-}
-
-impl ForceOrderRepository {
-    pub fn new(pool: Arc<RotatingPool>) -> Self {
-        Self { pool: pool.clone() }
-    }
-}
+pub struct ForceOrderRepository;
 
 impl Repository for ForceOrderRepository {
     type Input = ForceOrderInsert;
 
-    async fn insert(&self, order: &Self::Input) -> Result<(), sqlx::Error> {
-        let (pool, _) = self.pool.get_pool().await?;
-        sqlx::query(
+    fn insert(conn: &Connection, order: &Self::Input) -> Result<()> {
+        conn.execute(
             r#"
                 INSERT INTO liquidations (
                     time, symbol_id, side, price, quantity
                 ) VALUES (?, ?, ?, ?, ?)
             "#,
-        )
-        .bind(order.time)
-        .bind(&order.symbol)
-        .bind(order.side.clone())
-        .bind(order.price.0)
-        .bind(order.quantity.0)
-        .execute(&pool)
-        .await?;
+            params![
+                order.time,
+                order.symbol,
+                order.side,
+                order.price.0,
+                order.quantity.0
+            ],
+        )?;
         Ok(())
     }
 
-    async fn insert_batch(&self, orders: &[Self::Input]) -> Result<(), sqlx::Error> {
+    fn insert_batch(tx: &Transaction, orders: &[Self::Input]) -> Result<()> {
         if orders.is_empty() {
             return Ok(());
         }
-        let (pool, _) = self.pool.get_pool().await?;
-        let mut tx = pool.begin().await?;
-
-        for chunk in orders.chunks(BATCH_SIZE) {
-            let mut query_builder = QueryBuilder::new(
-                r#"
-                    INSERT INTO liquidations (
-                        time, symbol_id, side, price, quantity
-                    )
-                "#,
-            );
-            query_builder.push_values(chunk, |mut b, order| {
-                b.push_bind(order.time)
-                    .push_bind(&order.symbol)
-                    .push_bind(&order.side)
-                    .push_bind(order.price.0)
-                    .push_bind(order.quantity.0);
-            });
-            let query = query_builder.build();
-            query.execute(&mut *tx).await?;
+        let mut stmt = tx.prepare_cached(
+            r#"
+                INSERT INTO liquidations (
+                    time, symbol_id, side, price, quantity
+                ) VALUES (?, ?, ?, ?, ?)
+            "#,
+        )?;
+        for order in orders {
+            stmt.execute(params![
+                order.time,
+                order.symbol,
+                order.side,
+                order.price.0,
+                order.quantity.0
+            ])?;
         }
-        tx.commit().await?;
         Ok(())
     }
 }

@@ -82,3 +82,9 @@ impl BackupOneShotActor {
         Self { id: Uuid::new_v4() }
     }
 }
+
+impl Default for BackupOneShotActor {
+    fn default() -> Self {
+        Self::new()
+    }
+}

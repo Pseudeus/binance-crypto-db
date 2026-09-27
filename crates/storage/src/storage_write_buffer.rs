@@ -1,59 +1,62 @@
-use std::sync::Arc;
-
-use anyhow::Ok;
-use tokio::sync::Mutex;
-
-use crate::repositories::Repository;
-
-pub struct StorageWriteBuffer<T, R>
-where
-    R: Repository<Input = T>,
-{
-    repo: R,
-    buffer: Arc<Mutex<Vec<T>>>,
-    buffer_capacity: usize,
+pub struct StorageWriteBuffer<T> {
+    buffer: Vec<T>,
+    capacity: usize,
 }
 
-impl<T, R: Repository<Input = T>> StorageWriteBuffer<T, R> {
-    pub fn new(repo: R, capacity: usize) -> Self {
-        let buffer = Vec::with_capacity(capacity);
+impl<T> StorageWriteBuffer<T> {
+    pub fn new(capacity: usize) -> Self {
         Self {
-            repo,
-            buffer: Arc::new(Mutex::new(buffer)),
-            buffer_capacity: capacity,
+            buffer: Vec::with_capacity(capacity),
+            capacity,
         }
     }
 
-    async fn flush(&self) -> anyhow::Result<()> {
-        let mut guard = self.buffer.lock().await;
-        self.repo.insert_batch(&guard).await?;
-        guard.clear();
-        drop(guard);
-        Ok(())
-    }
-
-    pub async fn push(&self, item: T) -> anyhow::Result<()> {
-        let mut guard = self.buffer.lock().await;
-
-        if guard.len() < self.buffer_capacity {
-            guard.push(item);
+    pub fn push(&mut self, item: T) -> Option<Vec<T>> {
+        self.buffer.push(item);
+        if self.buffer.len() >= self.capacity {
+            Some(std::mem::replace(
+                &mut self.buffer,
+                Vec::with_capacity(self.capacity),
+            ))
         } else {
-            drop(guard);
-            self.flush().await?;
-            guard = self.buffer.lock().await;
-            guard.push(item);
+            None
         }
-        drop(guard);
-        Ok(())
     }
 
-    pub async fn close(&self) -> anyhow::Result<()> {
-        let guard = self.buffer.lock().await;
-
-        if !guard.is_empty() {
-            drop(guard);
-            self.flush().await?;
+    pub fn flush(&mut self) -> Option<Vec<T>> {
+        if self.buffer.is_empty() {
+            None
+        } else {
+            Some(std::mem::replace(
+                &mut self.buffer,
+                Vec::with_capacity(self.capacity),
+            ))
         }
-        Ok(())
+    }
+
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_storage_write_buffer_push_and_flush() {
+        let mut buf = StorageWriteBuffer::new(3);
+        assert_eq!(buf.push(1), None);
+        assert_eq!(buf.push(2), None);
+        assert_eq!(buf.push(3), Some(vec![1, 2, 3]));
+        assert_eq!(buf.len(), 0);
+
+        assert_eq!(buf.push(4), None);
+        assert_eq!(buf.flush(), Some(vec![4]));
+        assert_eq!(buf.flush(), None);
     }
 }

@@ -1,111 +1,113 @@
 use common::actors::{Actor, ActorType, ControlMessage};
-use common::models::MarketEvent;
+use common::models::{
+    AggTradeInsert, ForceOrderInsert, KlineInsert, MarketEvent, MarkPriceInsert, OpenInterestInsert,
+    OrderBookInsert,
+};
 use futures_util::future::BoxFuture;
 use std::sync::Arc;
-use tokio::sync::{Semaphore, broadcast, mpsc};
-use tracing::{error, info, warn};
+use tokio::sync::{broadcast, mpsc};
+use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::db::RotatingPool;
-use crate::repositories::aggtrade_repo::AggTradeWriterBuffer;
-use crate::repositories::forceorder_repo::ForceOrderWriterBuffer;
-use crate::repositories::klines_repo::KlineWriterBuffer;
-use crate::repositories::markprice_repo::MarkPriceWriterBuffer;
-use crate::repositories::openinterest_repo::OpenInterestWriterBuffer;
-use crate::repositories::orderbook_repo::OrderBookWriterBuffer;
-use crate::repositories::{
-    AggTradeRepository, ForceOrderRepository, KlineRepository, MarkPriceRepository,
-    OpenInterestRepository, OrderBookRepository,
-};
+use crate::db::DbWriteBatch;
+use crate::storage_write_buffer::StorageWriteBuffer;
 
-const BUFFER_CAPACITY: usize = 1_000;
+const BUFFER_CAPACITY: usize = 5_000;
 
-/// Internal state shared between the actor loop and worker tasks.
-struct StorageState {
-    write_semaphore: Arc<Semaphore>,
+/// Actor responsible for persisting all market events to SQLite via a dedicated writer thread.
+///
+/// Subscribes to the central broadcast bus, aggregates events into typed in-memory buffers,
+/// and flushes batches to the `DbWriter` worker thread on dual triggers:
+/// 1. When buffer capacity reaches `BUFFER_CAPACITY` (e.g. 5,000 items).
+/// 2. When a 1.0-second interval ticker elapses for any non-empty buffer.
+pub struct StorageActor {
+    id: Uuid,
+    db_sender: mpsc::Sender<DbWriteBatch>,
+    market_rx: broadcast::Receiver<Arc<MarketEvent>>,
 
-    // Repositories (Pre-instantiated "Singletons")
-    aggtrade_repo: AggTradeWriterBuffer,
-    orderbook_repo: OrderBookWriterBuffer,
-    kline_repo: KlineWriterBuffer,
-    markprice_repo: MarkPriceWriterBuffer,
-    forceorder_repo: ForceOrderWriterBuffer,
-    openinterest_repo: OpenInterestWriterBuffer,
+    aggtrade_buf: StorageWriteBuffer<AggTradeInsert>,
+    orderbook_buf: StorageWriteBuffer<OrderBookInsert>,
+    kline_buf: StorageWriteBuffer<KlineInsert>,
+    markprice_buf: StorageWriteBuffer<MarkPriceInsert>,
+    forceorder_buf: StorageWriteBuffer<ForceOrderInsert>,
+    openinterest_buf: StorageWriteBuffer<OpenInterestInsert>,
 }
 
-impl StorageState {
-    pub fn new(pool: Arc<RotatingPool>) -> Self {
+impl StorageActor {
+    pub fn new(
+        db_sender: mpsc::Sender<DbWriteBatch>,
+        market_rx: broadcast::Receiver<Arc<MarketEvent>>,
+    ) -> Self {
         Self {
-            write_semaphore: Arc::new(Semaphore::new(50)),
-
-            aggtrade_repo: AggTradeWriterBuffer::new(
-                AggTradeRepository::new(pool.clone()),
-                BUFFER_CAPACITY,
-            ),
-            orderbook_repo: OrderBookWriterBuffer::new(
-                OrderBookRepository::new(pool.clone()),
-                BUFFER_CAPACITY,
-            ),
-            kline_repo: KlineWriterBuffer::new(KlineRepository::new(pool.clone()), BUFFER_CAPACITY),
-            markprice_repo: MarkPriceWriterBuffer::new(
-                MarkPriceRepository::new(pool.clone()),
-                BUFFER_CAPACITY,
-            ),
-            forceorder_repo: ForceOrderWriterBuffer::new(
-                ForceOrderRepository::new(pool.clone()),
-                BUFFER_CAPACITY,
-            ),
-            openinterest_repo: OpenInterestWriterBuffer::new(
-                OpenInterestRepository::new(pool),
-                BUFFER_CAPACITY,
-            ),
+            id: Uuid::new_v4(),
+            db_sender,
+            market_rx,
+            aggtrade_buf: StorageWriteBuffer::new(BUFFER_CAPACITY),
+            orderbook_buf: StorageWriteBuffer::new(BUFFER_CAPACITY),
+            kline_buf: StorageWriteBuffer::new(BUFFER_CAPACITY),
+            markprice_buf: StorageWriteBuffer::new(BUFFER_CAPACITY),
+            forceorder_buf: StorageWriteBuffer::new(BUFFER_CAPACITY),
+            openinterest_buf: StorageWriteBuffer::new(BUFFER_CAPACITY),
         }
     }
 
-    async fn persist_event(&self, event: Arc<MarketEvent>) -> anyhow::Result<()> {
+    async fn handle_event(&mut self, event: Arc<MarketEvent>) {
         use common::models::MarketEvent::*;
 
         match &*event {
             AggTrade(data) => {
-                self.aggtrade_repo.push(data.clone()).await?;
+                if let Some(batch) = self.aggtrade_buf.push(data.clone()) {
+                    let _ = self.db_sender.send(DbWriteBatch::AggTrade(batch)).await;
+                }
             }
             OrderBook(data) => {
-                self.orderbook_repo.push(data.clone()).await?;
+                if let Some(batch) = self.orderbook_buf.push(data.clone()) {
+                    let _ = self.db_sender.send(DbWriteBatch::OrderBook(batch)).await;
+                }
             }
             Kline((data, _is_final)) => {
-                self.kline_repo.push(data.clone()).await?;
+                if let Some(batch) = self.kline_buf.push(data.clone()) {
+                    let _ = self.db_sender.send(DbWriteBatch::Kline(batch)).await;
+                }
             }
             MarkPrice(data) => {
-                self.markprice_repo.push(data.clone()).await?;
+                if let Some(batch) = self.markprice_buf.push(data.clone()) {
+                    let _ = self.db_sender.send(DbWriteBatch::MarkPrice(batch)).await;
+                }
             }
             ForceOrder(data) => {
-                self.forceorder_repo.push(data.clone()).await?;
+                if let Some(batch) = self.forceorder_buf.push(data.clone()) {
+                    let _ = self.db_sender.send(DbWriteBatch::ForceOrder(batch)).await;
+                }
             }
             OpenInterest(data) => {
-                self.openinterest_repo.push(data.clone()).await?;
+                if let Some(batch) = self.openinterest_buf.push(data.clone()) {
+                    let _ = self.db_sender.send(DbWriteBatch::OpenInterest(batch)).await;
+                }
             }
-            AccountUpdate(_updates) => {}
-            ExecutionReport(_report) => {}
+            AccountUpdate(_) => {}
+            ExecutionReport(_) => {}
         }
-        Ok(())
     }
-}
 
-/// Actor responsible for persisting all market and account events to SQLite.
-///
-/// Subscribes to the central broadcast bus and uses `DataManager` for async I/O.
-pub struct StorageActor {
-    id: Uuid,
-    state: Arc<StorageState>,
-    market_rx: broadcast::Receiver<Arc<MarketEvent>>,
-}
-
-impl StorageActor {
-    pub fn new(pool: Arc<RotatingPool>, market_rx: broadcast::Receiver<Arc<MarketEvent>>) -> Self {
-        Self {
-            id: Uuid::new_v4(),
-            state: Arc::new(StorageState::new(pool)),
-            market_rx,
+    async fn flush_all(&mut self) {
+        if let Some(batch) = self.aggtrade_buf.flush() {
+            let _ = self.db_sender.send(DbWriteBatch::AggTrade(batch)).await;
+        }
+        if let Some(batch) = self.orderbook_buf.flush() {
+            let _ = self.db_sender.send(DbWriteBatch::OrderBook(batch)).await;
+        }
+        if let Some(batch) = self.kline_buf.flush() {
+            let _ = self.db_sender.send(DbWriteBatch::Kline(batch)).await;
+        }
+        if let Some(batch) = self.markprice_buf.flush() {
+            let _ = self.db_sender.send(DbWriteBatch::MarkPrice(batch)).await;
+        }
+        if let Some(batch) = self.forceorder_buf.flush() {
+            let _ = self.db_sender.send(DbWriteBatch::ForceOrder(batch)).await;
+        }
+        if let Some(batch) = self.openinterest_buf.flush() {
+            let _ = self.db_sender.send(DbWriteBatch::OpenInterest(batch)).await;
         }
     }
 }
@@ -125,44 +127,35 @@ impl Actor for StorageActor {
     ) -> BoxFuture<'_, anyhow::Result<()>> {
         let _heartbeat_handle = self.spawn_heartbeat(supervisor_tx.clone());
 
-        info!("StorageActor started and listening for events.");
+        info!("StorageActor started and listening for events with dedicated DB writer.");
         Box::pin(async move {
-            loop {
-                match self.market_rx.recv().await {
-                    Ok(event) => {
-                        let state = self.state.clone();
+            let mut flush_timer = tokio::time::interval(std::time::Duration::from_secs(1));
+            flush_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-                        match *event {
-                            MarketEvent::AccountUpdate(_) | MarketEvent::ExecutionReport(_) => {
-                                tokio::spawn(async move {
-                                    if let Err(e) = state.persist_event(event).await {
-                                        error!(
-                                            "CRITICAL: Failed to persist account/execution event: {}",
-                                            e
-                                        );
-                                    }
-                                });
+            loop {
+                tokio::select! {
+                    msg = self.market_rx.recv() => {
+                        match msg {
+                            Ok(event) => {
+                                self.handle_event(event).await;
                             }
-                            _ => {
-                                //TODO: this is kinda a bottleneck to tokio runtime.
-                                tokio::spawn(async move {
-                                    let _permit = state.write_semaphore.acquire().await.ok();
-                                    if let Err(e) = state.persist_event(event).await {
-                                        error!("Failed to persist market event: {}", e);
-                                    }
-                                });
+                            Err(broadcast::error::RecvError::Lagged(n)) => {
+                                warn!("StorageActor lagged behind broadcast by {} messages", n);
+                            }
+                            Err(_) => {
+                                info!("StorageActor stopping: broadcast channel closed.");
+                                break;
                             }
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("StorageActor lagged behind broadcast by {} messages", n);
-                    }
-                    Err(_) => {
-                        info!("StorageActor stopping: broadcast channel closed.");
-                        break;
+                    _ = flush_timer.tick() => {
+                        self.flush_all().await;
                     }
                 }
             }
+
+            self.flush_all().await;
+            info!("StorageActor stopped, buffers flushed.");
             Ok(())
         })
     }
